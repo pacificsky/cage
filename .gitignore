@@ -1,0 +1,12 @@
+# Claude Code local settings
+.claude/settings.local.json
+.claude/projects/
+.claude/worktrees/
+
+# macOS
+.DS_Store
+
+# Editor
+*.swp
+*.swo
+*~
