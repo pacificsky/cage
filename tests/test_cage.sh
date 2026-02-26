@@ -100,6 +100,8 @@ print_summary() {
 MOCK_DIR=""
 MOCK_CALLS_FILE=""
 MOCK_RESPONSES_DIR=""
+FAKE_HOME=""
+REAL_HOME="$HOME"
 
 setup_mock() {
     MOCK_DIR="$(mktemp -d)"
@@ -107,6 +109,14 @@ setup_mock() {
     MOCK_RESPONSES_DIR="$MOCK_DIR/responses"
     mkdir -p "$MOCK_RESPONSES_DIR"
     touch "$MOCK_CALLS_FILE"
+
+    # Sandbox: cage.sh reads $HOME/.ssh, $HOME/.gitconfig, etc. to build
+    # docker -v flags.  Point HOME at a throwaway directory so the tests
+    # can never read or write anything under the real home directory.
+    FAKE_HOME="$MOCK_DIR/fakehome"
+    mkdir -p "$FAKE_HOME/.ssh" "$FAKE_HOME/.config/cage"
+    touch "$FAKE_HOME/.gitconfig"
+    export HOME="$FAKE_HOME"
 
     # --- mock docker executable ---
     cat > "$MOCK_DIR/docker" <<'MOCK_SCRIPT'
@@ -157,6 +167,7 @@ MOCK_SCRIPT
 }
 
 teardown_mock() {
+    export HOME="$REAL_HOME"
     if [ -n "$MOCK_DIR" ] && [ -d "$MOCK_DIR" ]; then
         rm -rf "$MOCK_DIR"
     fi
