@@ -3,6 +3,7 @@ set -euo pipefail
 
 VERSION="0.1.0"
 IMAGE="${CAGE_IMAGE:-ghcr.io/pacificsky/devcontainer-lite:latest}"
+CLAUDE_VOL="cage-claude"
 
 # --- Helpers ---
 
@@ -85,11 +86,9 @@ cmd_enter() {
             fi
             info "Creating $name"
 
-            local claude_vol="${name}-claude"
-
             local -a mount_args=(
                 -v "${project_dir}:${project_dir}"
-                -v "${claude_vol}:/home/vscode/.claude"
+                -v "${CLAUDE_VOL}:/home/vscode/.claude"
                 -v "${HOME}/.ssh:/home/vscode/.ssh:ro"
                 -v "${HOME}/.gitconfig:/home/vscode/.gitconfig:ro"
             )
@@ -149,21 +148,39 @@ cmd_rm() {
     esac
 }
 
-cmd_obliterate() {
-    local project_dir="$1"
-    local name
-    name="$(container_name "$project_dir")"
-    local claude_vol="${name}-claude"
-
-    local state
-    state="$(container_state "$name")"
-    if [ "$state" != "none" ]; then
-        cmd_rm "$project_dir"
+cmd_rmconfig() {
+    local ids
+    ids="$(docker ps -a --filter "label=cage.project" -q)" || true
+    if [ -n "$ids" ]; then
+        local running
+        running="$(docker ps --filter "label=cage.project" -q)" || true
+        if [ -n "$running" ]; then
+            info "Stopping running cage containers"
+            echo "$running" | xargs docker stop
+        fi
     fi
+    if docker volume inspect "$CLAUDE_VOL" >/dev/null 2>&1; then
+        info "Removing shared config volume $CLAUDE_VOL"
+        docker volume rm "$CLAUDE_VOL"
+    else
+        info "No shared config volume to remove"
+    fi
+}
 
-    if docker volume inspect "$claude_vol" >/dev/null 2>&1; then
-        info "Removing volume $claude_vol"
-        docker volume rm "$claude_vol"
+cmd_obliterate() {
+    local ids
+    ids="$(docker ps -a --filter "label=cage.project" -q)" || true
+    if [ -n "$ids" ]; then
+        info "Removing all cage containers"
+        echo "$ids" | xargs docker rm -f
+    else
+        info "No cage containers to remove"
+    fi
+    if docker volume inspect "$CLAUDE_VOL" >/dev/null 2>&1; then
+        info "Removing shared config volume $CLAUDE_VOL"
+        docker volume rm "$CLAUDE_VOL"
+    else
+        info "No shared config volume to remove"
     fi
 }
 
@@ -262,7 +279,8 @@ Commands:
   list      List all cage containers
   shell     Open additional bash shell in running container
   restart   Remove and recreate container (volumes preserved)
-  obliterate Remove container and all associated volumes
+  obliterate Remove all cage containers and shared config volume
+  rmconfig  Stop all containers and remove shared config volume
   update    Pull latest image and recreate container
   help      Show this help
 
@@ -316,7 +334,8 @@ main() {
         list)   ensure_docker; cmd_list ;;
         shell)  ensure_docker; cmd_shell "$project_dir" ;;
         restart) ensure_docker; cmd_restart "$project_dir" ;;
-        obliterate) ensure_docker; cmd_obliterate "$project_dir" ;;
+        obliterate) ensure_docker; cmd_obliterate ;;
+        rmconfig) ensure_docker; cmd_rmconfig ;;
         update) ensure_docker; cmd_update "$project_dir" ;;
         *)      die "Unknown command: $cmd. Run 'cage.sh help' for usage." ;;
     esac

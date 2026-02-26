@@ -26,20 +26,23 @@ Deterministic: `cage-<dirname>-<8char-sha256-of-absolute-path>`. Example: `/User
 | Host | Container | Mode | Purpose |
 |------|-----------|------|---------|
 | `$PROJECT_DIR` | `$PROJECT_DIR` | rw | Same absolute path — error messages match host |
-| `~/.claude` | `/home/vscode/.claude` | rw | CC config for vscode user |
-| `~/.claude` | `$HOME/.claude` | rw | Resolve absolute-path plugin/skill refs |
+| `cage-claude` (shared Docker volume) | `/home/vscode/.claude` | rw | Shared CC config across all projects |
 | `~/.ssh` | `/home/vscode/.ssh` | ro | Git access |
-| `~/.config/cage/.claude-credentials.json` | `/home/vscode/.claude/.credentials.json` | ro | Only if file exists |
+| `~/.gitconfig` | `/home/vscode/.gitconfig` | ro | Git config |
 
 ### Subcommands
 
-- `cage.sh` — create or re-attach (default)
-- `cage.sh -p 3000:3000` — create with port forwarding
+- `cage.sh start` — create or re-attach (default)
+- `cage.sh start -p 3000:3000` — create with port forwarding
 - `cage.sh stop` — stop container
 - `cage.sh rm` — stop and remove container
+- `cage.sh rmconfig` — stop all containers and remove shared config volume
+- `cage.sh obliterate` — remove all cage containers and shared config volume
 - `cage.sh status` — show state and ports
 - `cage.sh list` — list all cage containers
-- `cage.sh shell` — open additional bash shell
+- `cage.sh shell` — open additional shell in running container
+- `cage.sh restart` — remove and recreate container (volumes preserved)
+- `cage.sh update` — pull latest image and recreate container
 
 ### Environment Variables
 

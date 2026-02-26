@@ -599,6 +599,7 @@ test_start_docker_run_mounts() {
     assert_contains "$calls" "cage.project=${pdir}" "cage.project label"
     assert_contains "$calls" "/home/vscode/.ssh:ro" "ssh mount read-only"
     assert_contains "$calls" "/home/vscode/.gitconfig:ro" "gitconfig mount read-only"
+    assert_contains "$calls" "cage-claude:/home/vscode/.claude" "shared claude volume"
 }
 
 test_start_container_hostname() {
@@ -672,28 +673,78 @@ test_list_filters_by_label() {
 }
 
 # ================================================================
-# Tests: cmd_obliterate
+# Tests: cmd_obliterate (global)
 # ================================================================
 
-test_obliterate_removes_container_and_volume() {
+test_obliterate_removes_all_containers_and_volume() {
     mock_reset
     mock_docker_response "info" 0 ""
-    mock_docker_response "inspect" 0 "true"
+    mock_docker_response "ps" 0 "abc123
+def456"
     mock_docker_response "rm" 0 ""
     mock_docker_response "volume" 0 ""
     local out; out="$(run_cage obliterate 2>&1)"
-    assert_contains "$out" "Stopping and removing" "removes container"
-    assert_contains "$out" "Removing volume" "removes volume"
+    assert_contains "$out" "Removing all cage containers" "removes containers"
+    assert_contains "$out" "Removing shared config volume" "removes volume"
+    assert_contains "$(mock_calls)" "rm -f" "docker rm -f called"
 }
 
-test_obliterate_no_container_only_volume() {
+test_obliterate_no_containers_no_volume() {
     mock_reset
     mock_docker_response "info" 0 ""
-    mock_docker_response "inspect" 1 ""      # no container
-    mock_docker_response "volume" 0 ""        # volume exists
+    mock_docker_response "ps" 0 ""
+    mock_docker_response "volume" 1 ""
     local out; out="$(run_cage obliterate 2>&1)"
-    assert_not_contains "$out" "Stopping" "no container removal"
-    assert_contains "$out" "Removing volume" "still removes volume"
+    assert_contains "$out" "No cage containers to remove" "no containers message"
+    assert_contains "$out" "No shared config volume to remove" "no volume message"
+}
+
+test_obliterate_containers_but_no_volume() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "ps" 0 "abc123"
+    mock_docker_response "rm" 0 ""
+    mock_docker_response "volume" 1 ""
+    local out; out="$(run_cage obliterate 2>&1)"
+    assert_contains "$out" "Removing all cage containers" "removes containers"
+    assert_contains "$out" "No shared config volume to remove" "no volume"
+}
+
+# ================================================================
+# Tests: cmd_rmconfig
+# ================================================================
+
+test_rmconfig_stops_containers_and_removes_volume() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    # ps -a (all cage containers)
+    mock_docker_response_n "ps" 1 0 "abc123"
+    # ps (running only)
+    mock_docker_response_n "ps" 2 0 "abc123"
+    mock_docker_response "stop" 0 ""
+    mock_docker_response "volume" 0 ""
+    local out; out="$(run_cage rmconfig 2>&1)"
+    assert_contains "$out" "Stopping running cage containers" "stops containers"
+    assert_contains "$out" "Removing shared config volume" "removes volume"
+}
+
+test_rmconfig_no_containers_removes_volume() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "ps" 0 ""
+    mock_docker_response "volume" 0 ""
+    local out; out="$(run_cage rmconfig 2>&1)"
+    assert_not_contains "$out" "Stopping" "no stop needed"
+    assert_contains "$out" "Removing shared config volume" "removes volume"
+}
+
+test_rmconfig_no_volume() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "ps" 0 ""
+    mock_docker_response "volume" 1 ""
+    local out; out="$(run_cage rmconfig 2>&1)"
+    assert_contains "$out" "No shared config volume to remove" "no volume message"
 }
 
 # ================================================================
@@ -857,9 +908,16 @@ main() {
     run_test test_list_filters_by_label
 
     echo ""
-    echo "--- cmd_obliterate ---"
-    run_test test_obliterate_removes_container_and_volume
-    run_test test_obliterate_no_container_only_volume
+    echo "--- cmd_obliterate (global) ---"
+    run_test test_obliterate_removes_all_containers_and_volume
+    run_test test_obliterate_no_containers_no_volume
+    run_test test_obliterate_containers_but_no_volume
+
+    echo ""
+    echo "--- cmd_rmconfig ---"
+    run_test test_rmconfig_stops_containers_and_removes_volume
+    run_test test_rmconfig_no_containers_removes_volume
+    run_test test_rmconfig_no_volume
 
     echo ""
     echo "--- cmd_restart ---"
