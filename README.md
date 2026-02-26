@@ -2,62 +2,69 @@
 
 Run coding agents safely without restrictions in isolated Docker containers on macOS.
 
-cage wraps Docker to spin up containers with the [devcontainer-lite](https://github.com/pacificsky/devcontainer-lite) image, mounting your project and credentials so you can run Claude Code or Codex with `--dangerously-skip-permissions` without risk to your host system.
+cage wraps Docker to manage containers built from the [devcontainer-lite](https://github.com/pacificsky/devcontainer-lite) image. Your project is mounted at its original absolute path so error messages and paths match your host. Run Claude Code or Codex with `--dangerously-skip-permissions` without risk to your host system.
 
 ## Install
 
 ```bash
-# Clone the repo
 git clone git@github.com:pacificsky/cage.git
 cd cage
-
-# Optional: add to PATH
 ln -s "$(pwd)/cage.sh" /usr/local/bin/cage
 ```
 
 Requires Docker (or [colima](https://github.com/abiosoft/colima)) running on your Mac.
 
-## Usage
+## Quick Start
 
 ```bash
-# Start or re-attach to a container for the current directory
-./cage.sh
-
-# Start with port forwarding
-./cage.sh -p 3000:3000 -p 8080:8080
-
-# Show container status
-./cage.sh status
-
-# List all cage containers
-./cage.sh list
-
-# Open an additional shell in a running container
-./cage.sh shell
-
-# Stop the container
-./cage.sh stop
-
-# Remove the container (required to change port mappings)
-./cage.sh rm
+cd ~/src/my-project
+cage start                # create container and enter it
+cage start -p 3000:3000   # with port forwarding
 ```
 
-## How It Works
+Running `cage start` again from the same directory re-attaches to the existing container — no new container is created.
 
-Each project directory gets a deterministic container name (`cage-<dirname>-<hash>`). Running `cage.sh` from the same directory always targets the same container:
+## Commands
 
-- **Container running** — re-attaches
-- **Container stopped** — restarts and re-attaches
-- **No container** — creates a new one
+| Command | Description |
+|---------|-------------|
+| `cage start` | Create or re-attach to container for current directory |
+| `cage stop` | Stop the container |
+| `cage rm` | Remove the container (volumes preserved) |
+| `cage restart` | Remove and recreate container (volumes preserved) |
+| `cage update` | Pull latest image and recreate container |
+| `cage obliterate` | Remove container **and** all associated volumes |
+| `cage status` | Show container name, state, and port mappings |
+| `cage list` | List all cage containers across projects |
+| `cage shell` | Open an additional shell in a running container |
 
-Your project is mounted at its original absolute path inside the container, so error messages and paths match your host. `~/.claude` and `~/.ssh` are mounted for credentials and git access.
+## What Gets Mounted
+
+| Host | Container | Purpose |
+|------|-----------|---------|
+| Project directory | Same absolute path | Code editing, matching error paths |
+| `~/.ssh` | `/home/vscode/.ssh` (ro) | Git access |
+| `~/.gitconfig` | `/home/vscode/.gitconfig` (ro) | Git identity |
+
+Agent configuration (`~/.claude`) lives in a named Docker volume tied to the container, persisting across restarts and recreations.
+
+## Image Updates
+
+cage automatically pulls the latest image when creating a new container. When re-attaching to an existing container, it warns if a newer image is available locally:
+
+```
+cage: A newer image is available. Run 'cage.sh update' to upgrade.
+```
+
+`cage update` pulls the latest image and recreates the container.
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CAGE_IMAGE` | `ghcr.io/pacificsky/devcontainer-lite:latest` | Container image to use |
-| `DOCKER_CONTEXT` | (system default) | Docker context override |
+| `CAGE_IMAGE` | `ghcr.io/pacificsky/devcontainer-lite:latest` | Container image |
+
+Set `CAGE_IMAGE` to a local image name to skip remote pulls entirely.
 
 ## License
 
