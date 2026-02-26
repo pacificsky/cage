@@ -1,0 +1,23 @@
+name: Test cage.sh
+
+on:
+  pull_request:
+    paths:
+      - 'cage.sh'
+      - 'tests/**'
+      - '.github/workflows/test.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'cage.sh'
+      - 'tests/**'
+      - '.github/workflows/test.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run tests
+        run: bash tests/test_cage.sh
