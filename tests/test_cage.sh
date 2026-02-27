@@ -300,13 +300,13 @@ test_help_long_flag() {
     local out; out="$(run_cage --help)";  assert_contains "$out" "Usage:"
 }
 test_version_V() {
-    local out; out="$(run_cage -V)";      assert_contains "$out" "cage 0.1.0"
+    local out; out="$(run_cage -V)";      assert_contains "$out" "cage 0.2.0"
 }
 test_version_long() {
-    local out; out="$(run_cage --version)"; assert_contains "$out" "cage 0.1.0"
+    local out; out="$(run_cage --version)"; assert_contains "$out" "cage 0.2.0"
 }
 test_version_command() {
-    local out; out="$(run_cage version)"; assert_contains "$out" "cage 0.1.0"
+    local out; out="$(run_cage version)"; assert_contains "$out" "cage 0.2.0"
 }
 
 test_unknown_command_fails() {
@@ -597,9 +597,9 @@ test_start_docker_run_mounts() {
     assert_contains "$calls" "-v ${pdir}:${pdir}" "project dir mounted"
     assert_contains "$calls" "--workdir ${pdir}" "workdir is project dir"
     assert_contains "$calls" "cage.project=${pdir}" "cage.project label"
-    assert_contains "$calls" "/home/vscode/.ssh:ro" "ssh mount read-only"
-    assert_contains "$calls" "/home/vscode/.gitconfig:ro" "gitconfig mount read-only"
-    assert_contains "$calls" "cage-claude:/home/vscode/.claude" "shared claude volume"
+    assert_contains "$calls" "cage-home:/home/vscode" "shared home volume"
+    assert_not_contains "$calls" "/home/vscode/.ssh" "no ssh dir mount"
+    assert_not_contains "$calls" "/home/vscode/.gitconfig" "no gitconfig bind-mount"
 }
 
 test_start_container_hostname() {
@@ -685,7 +685,7 @@ def456"
     mock_docker_response "volume" 0 ""
     local out; out="$(run_cage obliterate 2>&1)"
     assert_contains "$out" "Removing all cage containers" "removes containers"
-    assert_contains "$out" "Removing shared config volume" "removes volume"
+    assert_contains "$out" "Removing shared home volume" "removes volume"
     assert_contains "$(mock_calls)" "rm -f" "docker rm -f called"
 }
 
@@ -696,7 +696,7 @@ test_obliterate_no_containers_no_volume() {
     mock_docker_response "volume" 1 ""
     local out; out="$(run_cage obliterate 2>&1)"
     assert_contains "$out" "No cage containers to remove" "no containers message"
-    assert_contains "$out" "No shared config volume to remove" "no volume message"
+    assert_contains "$out" "No shared home volume to remove" "no volume message"
 }
 
 test_obliterate_containers_but_no_volume() {
@@ -707,7 +707,7 @@ test_obliterate_containers_but_no_volume() {
     mock_docker_response "volume" 1 ""
     local out; out="$(run_cage obliterate 2>&1)"
     assert_contains "$out" "Removing all cage containers" "removes containers"
-    assert_contains "$out" "No shared config volume to remove" "no volume"
+    assert_contains "$out" "No shared home volume to remove" "no volume"
 }
 
 # ================================================================
@@ -725,7 +725,7 @@ test_rmconfig_stops_containers_and_removes_volume() {
     mock_docker_response "volume" 0 ""
     local out; out="$(run_cage rmconfig 2>&1)"
     assert_contains "$out" "Stopping running cage containers" "stops containers"
-    assert_contains "$out" "Removing shared config volume" "removes volume"
+    assert_contains "$out" "Removing shared home volume" "removes volume"
 }
 
 test_rmconfig_no_containers_removes_volume() {
@@ -735,7 +735,7 @@ test_rmconfig_no_containers_removes_volume() {
     mock_docker_response "volume" 0 ""
     local out; out="$(run_cage rmconfig 2>&1)"
     assert_not_contains "$out" "Stopping" "no stop needed"
-    assert_contains "$out" "Removing shared config volume" "removes volume"
+    assert_contains "$out" "Removing shared home volume" "removes volume"
 }
 
 test_rmconfig_no_volume() {
@@ -744,7 +744,7 @@ test_rmconfig_no_volume() {
     mock_docker_response "ps" 0 ""
     mock_docker_response "volume" 1 ""
     local out; out="$(run_cage rmconfig 2>&1)"
-    assert_contains "$out" "No shared config volume to remove" "no volume message"
+    assert_contains "$out" "No shared home volume to remove" "no volume message"
 }
 
 # ================================================================

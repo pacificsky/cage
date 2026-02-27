@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 IMAGE="${CAGE_IMAGE:-ghcr.io/pacificsky/devcontainer-lite:latest}"
-CLAUDE_VOL="cage-claude"
+HOME_VOL="cage-home"
 
 # --- Helpers ---
 
@@ -88,10 +88,24 @@ cmd_enter() {
 
             local -a mount_args=(
                 -v "${project_dir}:${project_dir}"
-                -v "${CLAUDE_VOL}:/home/vscode/.claude"
-                -v "${HOME}/.ssh:/home/vscode/.ssh:ro"
-                -v "${HOME}/.gitconfig:/home/vscode/.gitconfig:ro"
+                -v "${HOME_VOL}:/home/vscode"
             )
+
+            # Forward the host SSH agent so keys don't prompt for passphrases.
+            # Docker Desktop for Mac exposes the agent at a magic VM path.
+            local -a ssh_agent_args=()
+            if [[ -S "/run/host-services/ssh-auth.sock" ]] 2>/dev/null || \
+               docker info --format '{{.OperatingSystem}}' 2>/dev/null | grep -qi "docker desktop"; then
+                ssh_agent_args=(
+                    -v /run/host-services/ssh-auth.sock:/run/host-services/ssh-auth.sock
+                    -e SSH_AUTH_SOCK=/run/host-services/ssh-auth.sock
+                )
+            elif [[ -n "${SSH_AUTH_SOCK:-}" ]] && [[ -S "$SSH_AUTH_SOCK" ]]; then
+                ssh_agent_args=(
+                    -v "${SSH_AUTH_SOCK}:/tmp/ssh-agent.sock"
+                    -e SSH_AUTH_SOCK=/tmp/ssh-agent.sock
+                )
+            fi
 
             docker run -it \
                 --name "$name" \
@@ -99,6 +113,7 @@ cmd_enter() {
                 --workdir "$project_dir" \
                 ${port_flags[@]+"${port_flags[@]}"} \
                 "${mount_args[@]}" \
+                ${ssh_agent_args[@]+"${ssh_agent_args[@]}"} \
                 -l "cage.project=${project_dir}" \
                 "$IMAGE"
             ;;
@@ -159,11 +174,11 @@ cmd_rmconfig() {
             echo "$running" | xargs docker stop
         fi
     fi
-    if docker volume inspect "$CLAUDE_VOL" >/dev/null 2>&1; then
-        info "Removing shared config volume $CLAUDE_VOL"
-        docker volume rm "$CLAUDE_VOL"
+    if docker volume inspect "$HOME_VOL" >/dev/null 2>&1; then
+        info "Removing shared home volume $HOME_VOL"
+        docker volume rm "$HOME_VOL"
     else
-        info "No shared config volume to remove"
+        info "No shared home volume to remove"
     fi
 }
 
@@ -176,11 +191,11 @@ cmd_obliterate() {
     else
         info "No cage containers to remove"
     fi
-    if docker volume inspect "$CLAUDE_VOL" >/dev/null 2>&1; then
-        info "Removing shared config volume $CLAUDE_VOL"
-        docker volume rm "$CLAUDE_VOL"
+    if docker volume inspect "$HOME_VOL" >/dev/null 2>&1; then
+        info "Removing shared home volume $HOME_VOL"
+        docker volume rm "$HOME_VOL"
     else
-        info "No shared config volume to remove"
+        info "No shared home volume to remove"
     fi
 }
 
@@ -279,8 +294,8 @@ Commands:
   list      List all cage containers
   shell     Open additional bash shell in running container
   restart   Remove and recreate container (volumes preserved)
-  obliterate Remove all cage containers and shared config volume
-  rmconfig  Stop all containers and remove shared config volume
+  obliterate Remove all cage containers and shared home volume
+  rmconfig  Stop all containers and remove shared home volume
   update    Pull latest image and recreate container
   help      Show this help
 

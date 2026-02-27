@@ -26,9 +26,8 @@ Deterministic: `cage-<dirname>-<8char-sha256-of-absolute-path>`. Example: `/User
 | Host | Container | Mode | Purpose |
 |------|-----------|------|---------|
 | `$PROJECT_DIR` | `$PROJECT_DIR` | rw | Same absolute path — error messages match host |
-| `cage-claude` (shared Docker volume) | `/home/vscode/.claude` | rw | Shared CC config across all projects |
-| `~/.ssh` | `/home/vscode/.ssh` | ro | Git access |
-| `~/.gitconfig` | `/home/vscode/.gitconfig` | ro | Git config |
+| `cage-home` (shared Docker volume) | `/home/vscode` | rw | Shared home dir across all cages (Claude config, creds, shell state) |
+| SSH agent socket | `/run/host-services/ssh-auth.sock` | rw | SSH agent forwarding (Docker Desktop) |
 
 ### Subcommands
 
@@ -36,8 +35,8 @@ Deterministic: `cage-<dirname>-<8char-sha256-of-absolute-path>`. Example: `/User
 - `cage.sh start -p 3000:3000` — create with port forwarding
 - `cage.sh stop` — stop container
 - `cage.sh rm` — stop and remove container
-- `cage.sh rmconfig` — stop all containers and remove shared config volume
-- `cage.sh obliterate` — remove all cage containers and shared config volume
+- `cage.sh rmconfig` — stop all containers and remove shared home volume
+- `cage.sh obliterate` — remove all cage containers and shared home volume
 - `cage.sh status` — show state and ports
 - `cage.sh list` — list all cage containers
 - `cage.sh shell` — open additional shell in running container
@@ -53,6 +52,5 @@ Deterministic: `cage-<dirname>-<8char-sha256-of-absolute-path>`. Example: `/User
 
 - CWD = project dir (no git-root detection)
 - Docker label `cage.project=$PROJECT_DIR` on each container for listing
-- Conditional credentials mount (only if file exists)
 - Port flags (`-p`) collected before subcommand, forwarded to `docker run`
 - Re-attach: running → attach, stopped → start -ai, none → run
