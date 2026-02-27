@@ -825,6 +825,140 @@ test_start_running_hints_newer_image() {
 }
 
 # ================================================================
+# Tests: SSH agent forwarding
+# ================================================================
+
+test_start_ssh_agent_linux() {
+    # On Linux with SSH_AUTH_SOCK pointing to a real socket, cage.sh should
+    # bind-mount it into the container.
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "run" 0 ""
+
+    local sock="$MOCK_DIR/fake-agent.sock"
+    # Create a Unix socket so the -S test passes.
+    python3 -c "
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.bind(sys.argv[1])
+" "$sock" 2>/dev/null || socat UNIX-LISTEN:"$sock",fork /dev/null &
+
+    SSH_AUTH_SOCK="$sock" run_cage start 2>&1 >/dev/null || true
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-v ${sock}:/tmp/ssh-agent.sock" "socket bind-mounted"
+    assert_contains "$calls" "SSH_AUTH_SOCK=/tmp/ssh-agent.sock" "SSH_AUTH_SOCK set"
+    rm -f "$sock"
+}
+
+test_start_ssh_no_agent() {
+    # When SSH_AUTH_SOCK is unset, no SSH flags should be added.
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "run" 0 ""
+    unset SSH_AUTH_SOCK
+    run_cage start 2>&1 >/dev/null || true
+    local calls; calls="$(mock_calls)"
+    assert_not_contains "$calls" "SSH_AUTH_SOCK" "no SSH env when agent absent"
+    assert_not_contains "$calls" "ssh-agent.sock" "no ssh socket mount"
+    assert_not_contains "$calls" "ssh-auth.sock" "no ssh socket mount"
+}
+
+# Helper: make the test environment look like macOS with Colima.
+# Creates mock uname (returns Darwin) and mock colima in MOCK_DIR (already on PATH).
+# Sets up docker context inspect to return a Colima socket path.
+setup_colima_env() {
+    local forward_agent="${1:-false}"
+
+    # Mock uname to report Darwin.
+    cat > "$MOCK_DIR/uname" <<'UNAME_SCRIPT'
+#!/usr/bin/env bash
+for arg in "$@"; do
+    if [ "$arg" = "-s" ]; then echo "Darwin"; exit 0; fi
+done
+# Fallback for bare "uname"
+echo "Darwin"
+UNAME_SCRIPT
+    chmod +x "$MOCK_DIR/uname"
+
+    # Mock colima binary (just needs to exist).
+    cat > "$MOCK_DIR/colima" <<'COLIMA_SCRIPT'
+#!/usr/bin/env bash
+exit 0
+COLIMA_SCRIPT
+    chmod +x "$MOCK_DIR/colima"
+
+    # docker context inspect returns a Colima socket path.
+    mock_docker_response "context" 0 "unix:///Users/testuser/.colima/default/docker.sock"
+
+    # Create Colima config.
+    mkdir -p "$HOME/.colima/default"
+    cat > "$HOME/.colima/default/colima.yaml" <<EOF
+cpu: 4
+memory: 8
+forwardAgent: ${forward_agent}
+EOF
+}
+
+teardown_colima_env() {
+    rm -f "$MOCK_DIR/uname" "$MOCK_DIR/colima"
+    rm -rf "$HOME/.colima"
+}
+
+test_start_ssh_macos_uses_vm_socket() {
+    # On macOS, cage.sh should use /run/host-services/ssh-auth.sock
+    # regardless of SSH_AUTH_SOCK value.
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "run" 0 ""
+    setup_colima_env true
+
+    SSH_AUTH_SOCK="/tmp/not-a-real-socket" run_cage start 2>&1 >/dev/null || true
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "/run/host-services/ssh-auth.sock:/run/host-services/ssh-auth.sock" "VM socket mounted"
+    assert_contains "$calls" "SSH_AUTH_SOCK=/run/host-services/ssh-auth.sock" "SSH_AUTH_SOCK points to VM socket"
+    assert_not_contains "$calls" "/tmp/not-a-real-socket" "host socket NOT mounted"
+    teardown_colima_env
+}
+
+test_start_colima_warns_no_ssh_agent() {
+    # When Colima is active but forwardAgent is false, warn the user.
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "run" 0 ""
+    setup_colima_env false
+
+    local out
+    out="$(run_cage start 2>&1)" || true
+    assert_contains "$out" "Colima does not have SSH agent forwarding enabled" "warning shown"
+    assert_contains "$out" "colima start --ssh-agent" "fix suggestion shown"
+    teardown_colima_env
+}
+
+test_start_colima_no_warn_when_forwarding_enabled() {
+    # No warning when forwardAgent: true.
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "run" 0 ""
+    setup_colima_env true
+
+    local out
+    out="$(run_cage start 2>&1)" || true
+    assert_not_contains "$out" "SSH agent forwarding enabled" "no warning when forwarding on"
+    assert_not_contains "$out" "colima start --ssh-agent" "no fix suggestion"
+    teardown_colima_env
+}
+
+# ================================================================
 # Run all tests
 # ================================================================
 
@@ -933,6 +1067,14 @@ main() {
     echo ""
     echo "--- image upgrade hint ---"
     run_test test_start_running_hints_newer_image
+
+    echo ""
+    echo "--- SSH agent forwarding ---"
+    run_test test_start_ssh_agent_linux
+    run_test test_start_ssh_no_agent
+    run_test test_start_ssh_macos_uses_vm_socket
+    run_test test_start_colima_warns_no_ssh_agent
+    run_test test_start_colima_no_warn_when_forwarding_enabled
 
     print_summary
 }

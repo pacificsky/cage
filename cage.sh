@@ -46,6 +46,32 @@ image_newer_available() {
     [ "$container_image_id" != "$latest_image_id" ]
 }
 
+# Warn if Colima is the active Docker runtime but SSH agent forwarding is off.
+check_colima_ssh_agent() {
+    command -v colima &>/dev/null || return 0
+
+    local docker_host="${DOCKER_HOST:-}"
+    if [[ -z "$docker_host" ]]; then
+        docker_host="$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)" || true
+    fi
+    [[ "$docker_host" == *colima* ]] || return 0
+
+    # Extract profile name from socket path (~/.colima/<profile>/docker.sock).
+    local colima_profile="default"
+    if [[ "$docker_host" =~ \.colima/([^/]+)/ ]]; then
+        colima_profile="${BASH_REMATCH[1]}"
+    fi
+
+    local colima_config="$HOME/.colima/${colima_profile}/colima.yaml"
+    if [[ -f "$colima_config" ]] && grep -q 'forwardAgent:.*true' "$colima_config"; then
+        return 0
+    fi
+
+    info "Warning: Colima does not have SSH agent forwarding enabled."
+    info "SSH keys won't be available inside the container."
+    info "Fix: colima stop && colima start --ssh-agent"
+}
+
 # --- Subcommands ---
 
 cmd_enter() {
@@ -91,16 +117,19 @@ cmd_enter() {
                 -v "${HOME_VOL}:/home/vscode"
             )
 
-            # Forward the host SSH agent so keys don't prompt for passphrases.
-            # Docker Desktop for Mac exposes the agent at a magic VM path.
+            # Forward the host SSH agent so git/ssh work inside the container.
             local -a ssh_agent_args=()
-            if [[ -S "/run/host-services/ssh-auth.sock" ]] 2>/dev/null || \
-               docker info --format '{{.OperatingSystem}}' 2>/dev/null | grep -qi "docker desktop"; then
+            if [[ "$(uname -s)" == "Darwin" ]]; then
+                # macOS: host sockets can't be bind-mounted across the VM
+                # boundary.  Docker Desktop and Colima (with --ssh-agent)
+                # expose a VM-internal proxy at /run/host-services/ssh-auth.sock.
                 ssh_agent_args=(
                     -v /run/host-services/ssh-auth.sock:/run/host-services/ssh-auth.sock
                     -e SSH_AUTH_SOCK=/run/host-services/ssh-auth.sock
                 )
+                check_colima_ssh_agent
             elif [[ -n "${SSH_AUTH_SOCK:-}" ]] && [[ -S "$SSH_AUTH_SOCK" ]]; then
+                # Linux: bind-mount the host socket directly.
                 ssh_agent_args=(
                     -v "${SSH_AUTH_SOCK}:/tmp/ssh-agent.sock"
                     -e SSH_AUTH_SOCK=/tmp/ssh-agent.sock
