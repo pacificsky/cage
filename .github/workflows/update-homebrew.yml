@@ -1,0 +1,57 @@
+name: Update Homebrew formula
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-tap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get release tag
+        id: tag
+        run: echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Download tarball and compute SHA256
+        id: sha
+        run: |
+          sha=$(curl -sL "https://github.com/pacificsky/cage/archive/refs/tags/${{ steps.tag.outputs.version }}.tar.gz" | shasum -a 256 | cut -d' ' -f1)
+          echo "sha256=${sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v4
+        with:
+          repository: pacificsky/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update formula
+        run: |
+          cat > Formula/cage.rb << 'FORMULA'
+          class Cage < Formula
+            desc "Run coding agents safely in containers on macOS"
+            homepage "https://github.com/pacificsky/cage"
+            url "https://github.com/pacificsky/cage/archive/refs/tags/${{ steps.tag.outputs.version }}.tar.gz"
+            sha256 "${{ steps.sha.outputs.sha256 }}"
+            license "MIT"
+
+            depends_on :macos
+
+            def install
+              bin.install "cage.sh" => "cage"
+            end
+
+            test do
+              assert_match "cage", shell_output("#{bin}/cage 2>&1", 1)
+            end
+          end
+          FORMULA
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' Formula/cage.rb
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/cage.rb
+          git commit -m "Update cage to ${{ steps.tag.outputs.version }}"
+          git push
