@@ -33,7 +33,8 @@ Running `cage start` again from the same directory re-attaches to the existing c
 | `cage rm` | Remove the container (volumes preserved) |
 | `cage restart` | Remove and recreate container (volumes preserved) |
 | `cage update` | Pull latest image and recreate container |
-| `cage obliterate` | Remove container **and** all associated volumes |
+| `cage rmconfig` | Stop all containers and remove shared home volume |
+| `cage obliterate` | Remove all cage containers and shared home volume |
 | `cage status` | Show container name, state, and port mappings |
 | `cage list` | List all cage containers across projects |
 | `cage shell` | Open an additional shell in a running container |
@@ -43,10 +44,10 @@ Running `cage start` again from the same directory re-attaches to the existing c
 | Host | Container | Purpose |
 |------|-----------|---------|
 | Project directory | Same absolute path | Code editing, matching error paths |
-| `~/.ssh` | `/home/vscode/.ssh` (ro) | Git access |
-| `~/.gitconfig` | `/home/vscode/.gitconfig` (ro) | Git identity |
+| `cage-home` (Docker volume) | `/home/vscode` | Shared home dir across all cages |
+| SSH agent socket | `/run/host-services/ssh-auth.sock` | SSH agent forwarding |
 
-Agent configuration (`~/.claude`) lives in a named Docker volume tied to the container, persisting across restarts and recreations.
+The shared home volume is auto-initialized from the image on first use and persists across all containers. Claude credentials, git config, shell history, and tool state all live here — configure once, share everywhere.
 
 ## Image Updates
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 IMAGE="${CAGE_IMAGE:-ghcr.io/pacificsky/devcontainer-lite:latest}"
-CLAUDE_VOL="cage-claude"
+HOME_VOL="cage-home"
 
 # --- Helpers ---
 
@@ -44,6 +44,32 @@ image_newer_available() {
     local latest_image_id
     latest_image_id="$(docker image inspect -f '{{.Id}}' "$IMAGE" 2>/dev/null)" || return 1
     [ "$container_image_id" != "$latest_image_id" ]
+}
+
+# Warn if Colima is the active Docker runtime but SSH agent forwarding is off.
+check_colima_ssh_agent() {
+    command -v colima &>/dev/null || return 0
+
+    local docker_host="${DOCKER_HOST:-}"
+    if [[ -z "$docker_host" ]]; then
+        docker_host="$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)" || true
+    fi
+    [[ "$docker_host" == *colima* ]] || return 0
+
+    # Extract profile name from socket path (~/.colima/<profile>/docker.sock).
+    local colima_profile="default"
+    if [[ "$docker_host" =~ \.colima/([^/]+)/ ]]; then
+        colima_profile="${BASH_REMATCH[1]}"
+    fi
+
+    local colima_config="$HOME/.colima/${colima_profile}/colima.yaml"
+    if [[ -f "$colima_config" ]] && grep -q 'forwardAgent:.*true' "$colima_config"; then
+        return 0
+    fi
+
+    info "Warning: Colima does not have SSH agent forwarding enabled."
+    info "SSH keys won't be available inside the container."
+    info "Fix: colima stop && colima start --ssh-agent"
 }
 
 # --- Subcommands ---
@@ -88,10 +114,27 @@ cmd_enter() {
 
             local -a mount_args=(
                 -v "${project_dir}:${project_dir}"
-                -v "${CLAUDE_VOL}:/home/vscode/.claude"
-                -v "${HOME}/.ssh:/home/vscode/.ssh:ro"
-                -v "${HOME}/.gitconfig:/home/vscode/.gitconfig:ro"
+                -v "${HOME_VOL}:/home/vscode"
             )
+
+            # Forward the host SSH agent so git/ssh work inside the container.
+            local -a ssh_agent_args=()
+            if [[ "$(uname -s)" == "Darwin" ]]; then
+                # macOS: host sockets can't be bind-mounted across the VM
+                # boundary.  Docker Desktop and Colima (with --ssh-agent)
+                # expose a VM-internal proxy at /run/host-services/ssh-auth.sock.
+                ssh_agent_args=(
+                    -v /run/host-services/ssh-auth.sock:/run/host-services/ssh-auth.sock
+                    -e SSH_AUTH_SOCK=/run/host-services/ssh-auth.sock
+                )
+                check_colima_ssh_agent
+            elif [[ -n "${SSH_AUTH_SOCK:-}" ]] && [[ -S "$SSH_AUTH_SOCK" ]]; then
+                # Linux: bind-mount the host socket directly.
+                ssh_agent_args=(
+                    -v "${SSH_AUTH_SOCK}:/tmp/ssh-agent.sock"
+                    -e SSH_AUTH_SOCK=/tmp/ssh-agent.sock
+                )
+            fi
 
             docker run -it \
                 --name "$name" \
@@ -99,6 +142,7 @@ cmd_enter() {
                 --workdir "$project_dir" \
                 ${port_flags[@]+"${port_flags[@]}"} \
                 "${mount_args[@]}" \
+                ${ssh_agent_args[@]+"${ssh_agent_args[@]}"} \
                 -l "cage.project=${project_dir}" \
                 "$IMAGE"
             ;;
@@ -159,11 +203,11 @@ cmd_rmconfig() {
             echo "$running" | xargs docker stop
         fi
     fi
-    if docker volume inspect "$CLAUDE_VOL" >/dev/null 2>&1; then
-        info "Removing shared config volume $CLAUDE_VOL"
-        docker volume rm "$CLAUDE_VOL"
+    if docker volume inspect "$HOME_VOL" >/dev/null 2>&1; then
+        info "Removing shared home volume $HOME_VOL"
+        docker volume rm "$HOME_VOL"
     else
-        info "No shared config volume to remove"
+        info "No shared home volume to remove"
     fi
 }
 
@@ -176,11 +220,11 @@ cmd_obliterate() {
     else
         info "No cage containers to remove"
     fi
-    if docker volume inspect "$CLAUDE_VOL" >/dev/null 2>&1; then
-        info "Removing shared config volume $CLAUDE_VOL"
-        docker volume rm "$CLAUDE_VOL"
+    if docker volume inspect "$HOME_VOL" >/dev/null 2>&1; then
+        info "Removing shared home volume $HOME_VOL"
+        docker volume rm "$HOME_VOL"
     else
-        info "No shared config volume to remove"
+        info "No shared home volume to remove"
     fi
 }
 
@@ -279,8 +323,8 @@ Commands:
   list      List all cage containers
   shell     Open additional bash shell in running container
   restart   Remove and recreate container (volumes preserved)
-  obliterate Remove all cage containers and shared config volume
-  rmconfig  Stop all containers and remove shared config volume
+  obliterate Remove all cage containers and shared home volume
+  rmconfig  Stop all containers and remove shared home volume
   update    Pull latest image and recreate container
   help      Show this help
 
