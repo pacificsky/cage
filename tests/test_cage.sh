@@ -837,6 +837,13 @@ test_start_ssh_agent_linux() {
     mock_docker_response "pull" 0 ""
     mock_docker_response "run" 0 ""
 
+    # Mock uname to report Linux (test may run on macOS).
+    cat > "$MOCK_DIR/uname" <<'UNAME_SCRIPT'
+#!/usr/bin/env bash
+echo "Linux"
+UNAME_SCRIPT
+    chmod +x "$MOCK_DIR/uname"
+
     local sock="$MOCK_DIR/fake-agent.sock"
     # Create a Unix socket so the -S test passes.
     python3 -c "
@@ -850,21 +857,31 @@ s.bind(sys.argv[1])
     assert_contains "$calls" "-v ${sock}:/tmp/ssh-agent.sock" "socket bind-mounted"
     assert_contains "$calls" "SSH_AUTH_SOCK=/tmp/ssh-agent.sock" "SSH_AUTH_SOCK set"
     rm -f "$sock"
+    rm -f "$MOCK_DIR/uname"
 }
 
 test_start_ssh_no_agent() {
-    # When SSH_AUTH_SOCK is unset, no SSH flags should be added.
+    # When SSH_AUTH_SOCK is unset on Linux, no SSH flags should be added.
     mock_reset
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
     mock_docker_response "pull" 0 ""
     mock_docker_response "run" 0 ""
+
+    # Mock uname to report Linux (test may run on macOS).
+    cat > "$MOCK_DIR/uname" <<'UNAME_SCRIPT'
+#!/usr/bin/env bash
+echo "Linux"
+UNAME_SCRIPT
+    chmod +x "$MOCK_DIR/uname"
+
     unset SSH_AUTH_SOCK
     run_cage start 2>&1 >/dev/null || true
     local calls; calls="$(mock_calls)"
     assert_not_contains "$calls" "SSH_AUTH_SOCK" "no SSH env when agent absent"
     assert_not_contains "$calls" "ssh-agent.sock" "no ssh socket mount"
     assert_not_contains "$calls" "ssh-auth.sock" "no ssh socket mount"
+    rm -f "$MOCK_DIR/uname"
 }
 
 # Helper: make the test environment look like macOS with Colima.
