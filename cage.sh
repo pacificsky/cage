@@ -5,6 +5,15 @@ VERSION="0.4.1"
 IMAGE="${CAGE_IMAGE:-ghcr.io/pacificsky/devcontainer-lite:latest}"
 HOME_VOL="cage-home"
 
+# Detect container runtime: prefer docker, fall back to podman.
+if command -v docker &>/dev/null; then
+    DOCKER=docker
+elif command -v podman &>/dev/null; then
+    DOCKER=podman
+else
+    DOCKER=docker   # let ensure_docker report the error
+fi
+
 # --- Helpers ---
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -22,7 +31,7 @@ container_name() {
 container_state() {
     local name="$1"
     local state
-    state="$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" || {
+    state="$($DOCKER inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" || {
         echo "none"
         return
     }
@@ -34,15 +43,15 @@ container_state() {
 }
 
 ensure_docker() {
-    docker info >/dev/null 2>&1 || die "Docker is not running. Start Docker (or colima) first."
+    $DOCKER info >/dev/null 2>&1 || die "Docker is not running. Start Docker (or colima/podman) first."
 }
 
 image_newer_available() {
     local name="$1"
     local container_image_id
-    container_image_id="$(docker inspect -f '{{.Image}}' "$name" 2>/dev/null)" || return 1
+    container_image_id="$($DOCKER inspect -f '{{.Image}}' "$name" 2>/dev/null)" || return 1
     local latest_image_id
-    latest_image_id="$(docker image inspect -f '{{.Id}}' "$IMAGE" 2>/dev/null)" || return 1
+    latest_image_id="$($DOCKER image inspect -f '{{.Id}}' "$IMAGE" 2>/dev/null)" || return 1
     [ "$container_image_id" != "$latest_image_id" ]
 }
 
@@ -52,7 +61,7 @@ check_colima_ssh_agent() {
 
     local docker_host="${DOCKER_HOST:-}"
     if [[ -z "$docker_host" ]]; then
-        docker_host="$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)" || true
+        docker_host="$($DOCKER context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)" || true
     fi
     [[ "$docker_host" == *colima* ]] || return 0
 
@@ -85,9 +94,9 @@ seed_home() {
     [ -n "$(ls -A "$seed_dir" 2>/dev/null)" ] || return 1
 
     info "Seeding home directory from $seed_dir"
-    docker cp "$seed_dir/." "$name:/tmp/cage-seed"
-    docker start "$name"
-    docker exec "$name" sh -c 'cp -rn /tmp/cage-seed/. /home/vscode/ && rm -rf /tmp/cage-seed'
+    $DOCKER cp "$seed_dir/." "$name:/tmp/cage-seed"
+    $DOCKER start "$name"
+    $DOCKER exec "$name" sh -c 'cp -rn /tmp/cage-seed/. /home/vscode/ && rm -rf /tmp/cage-seed'
     return 0
 }
 
@@ -112,7 +121,7 @@ cmd_enter() {
                 info "A newer image is available. Run 'cage upgrade' to upgrade."
             fi
             info "Re-attaching to $name"
-            docker attach "$name"
+            $DOCKER attach "$name"
             ;;
         stopped)
             if [ ${#port_flags[@]} -gt 0 ]; then
@@ -122,12 +131,12 @@ cmd_enter() {
                 info "A newer image is available. Run 'cage upgrade' to upgrade."
             fi
             info "Restarting $name"
-            docker start -ai "$name"
+            $DOCKER start -ai "$name"
             ;;
         none)
             if [[ "$IMAGE" == */* ]]; then
                 info "Pulling latest image..."
-                docker pull "$IMAGE"
+                $DOCKER pull "$IMAGE"
             fi
             info "Creating $name"
 
@@ -155,7 +164,7 @@ cmd_enter() {
                 )
             fi
 
-            docker create -it \
+            $DOCKER create -it \
                 --name "$name" \
                 --hostname "$name" \
                 --workdir "$project_dir" \
@@ -166,9 +175,9 @@ cmd_enter() {
                 "$IMAGE" >/dev/null
 
             if seed_home "$name"; then
-                docker attach "$name"
+                $DOCKER attach "$name"
             else
-                docker start -ai "$name"
+                $DOCKER start -ai "$name"
             fi
             ;;
     esac
@@ -184,7 +193,7 @@ cmd_stop() {
     case "$state" in
         running)
             info "Stopping $name"
-            docker stop "$name"
+            $DOCKER stop "$name"
             ;;
         stopped)
             info "$name is already stopped"
@@ -205,11 +214,11 @@ cmd_rm() {
     case "$state" in
         running)
             info "Stopping and removing $name"
-            docker rm -f "$name"
+            $DOCKER rm -f "$name"
             ;;
         stopped)
             info "Removing $name"
-            docker rm "$name"
+            $DOCKER rm "$name"
             ;;
         none)
             die "No container for $project_dir"
@@ -219,18 +228,18 @@ cmd_rm() {
 
 cmd_rmconfig() {
     local ids
-    ids="$(docker ps -a --filter "label=cage.project" -q)" || true
+    ids="$($DOCKER ps -a --filter "label=cage.project" -q)" || true
     if [ -n "$ids" ]; then
         local running
-        running="$(docker ps --filter "label=cage.project" -q)" || true
+        running="$($DOCKER ps --filter "label=cage.project" -q)" || true
         if [ -n "$running" ]; then
             info "Stopping running cage containers"
-            echo "$running" | xargs docker stop
+            echo "$running" | xargs $DOCKER stop
         fi
     fi
-    if docker volume inspect "$HOME_VOL" >/dev/null 2>&1; then
+    if $DOCKER volume inspect "$HOME_VOL" >/dev/null 2>&1; then
         info "Removing shared home volume $HOME_VOL"
-        docker volume rm "$HOME_VOL"
+        $DOCKER volume rm "$HOME_VOL"
     else
         info "No shared home volume to remove"
     fi
@@ -238,16 +247,16 @@ cmd_rmconfig() {
 
 cmd_obliterate() {
     local ids
-    ids="$(docker ps -a --filter "label=cage.project" -q)" || true
+    ids="$($DOCKER ps -a --filter "label=cage.project" -q)" || true
     if [ -n "$ids" ]; then
         info "Removing all cage containers"
-        echo "$ids" | xargs docker rm -f
+        echo "$ids" | xargs $DOCKER rm -f
     else
         info "No cage containers to remove"
     fi
-    if docker volume inspect "$HOME_VOL" >/dev/null 2>&1; then
+    if $DOCKER volume inspect "$HOME_VOL" >/dev/null 2>&1; then
         info "Removing shared home volume $HOME_VOL"
-        docker volume rm "$HOME_VOL"
+        $DOCKER volume rm "$HOME_VOL"
     else
         info "No shared home volume to remove"
     fi
@@ -265,7 +274,7 @@ cmd_status() {
 
     if [ "$state" != "none" ]; then
         local ports
-        ports="$(docker port "$name" 2>/dev/null)" || true
+        ports="$($DOCKER port "$name" 2>/dev/null)" || true
         if [ -n "$ports" ]; then
             echo "Ports:"
             echo "$ports" | sed 's/^/  /'
@@ -277,7 +286,7 @@ cmd_status() {
 
 cmd_list() {
     local format='table {{.Names}}\t{{.Status}}\t{{.Label "cage.project"}}'
-    docker ps -a --filter "label=cage.project" --format "$format"
+    $DOCKER ps -a --filter "label=cage.project" --format "$format"
 }
 
 cmd_shell() {
@@ -289,7 +298,7 @@ cmd_shell() {
 
     [ "$state" = "running" ] || die "Container $name is not running"
     info "Opening shell in $name"
-    docker exec -it "$name" zsh
+    $DOCKER exec -it "$name" zsh
 }
 
 cmd_restart() {
@@ -303,7 +312,7 @@ cmd_restart() {
         die "No container for $project_dir. Use 'cage start' to create one."
     fi
 
-    docker rm -f "$name" >/dev/null 2>&1 || true
+    $DOCKER rm -f "$name" >/dev/null 2>&1 || true
     cmd_enter "$project_dir"
 }
 
@@ -312,7 +321,7 @@ cmd_update() {
         die "Cannot update local image '$IMAGE'. Pull or build it manually."
     fi
     info "Pulling latest image..."
-    docker pull "$IMAGE"
+    $DOCKER pull "$IMAGE"
 }
 
 cmd_upgrade() {
@@ -325,7 +334,7 @@ cmd_upgrade() {
     if [ "$state" != "none" ]; then
         if image_newer_available "$name"; then
             info "Removing old container $name"
-            docker rm -f "$name" >/dev/null 2>&1 || true
+            $DOCKER rm -f "$name" >/dev/null 2>&1 || true
             info "Starting fresh container with new image"
             cmd_enter "$project_dir"
         else
