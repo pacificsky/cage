@@ -15,7 +15,7 @@ MIT licensed.
 
 ## Architecture
 
-Single bash script (`cage.sh`) that wraps Docker to manage isolated containers for running Claude Code or Codex with `--dangerously-skip-permissions`.
+Single bash script (`cage.sh`) that wraps Docker/Podman to manage isolated containers for running Claude Code or Codex with `--dangerously-skip-permissions`. Prefers `docker`, falls back to `podman` automatically.
 
 ### Container Naming
 
@@ -52,9 +52,15 @@ Deterministic: `cage-<dirname>-<8char-sha256-of-absolute-path>`. Example: `/User
 
 `~/.config/cage/home/` contents are copied into `/home/vscode/` on new container creation using `cp -n` (no-clobber). Existing files in the shared volume are never overwritten. The seed runs on every path that creates a new container: `start` (new), `restart`, and `upgrade`.
 
+### Testing
+
+- **Unit tests** (`tests/test_cage.sh`): Mock-based, no container runtime needed. Fast CI gate on every push.
+- **Integration tests** (`tests/test_integration.sh`): Run against a real container runtime (Docker or Podman). Uses `ubuntu:24.04` as a lightweight test image. Triggered on push to main + manual dispatch.
+
 ### Key Design Decisions
 
 - CWD = project dir (no git-root detection)
 - Docker label `cage.project=$PROJECT_DIR` on each container for listing
 - Port flags (`-p`) collected before subcommand, forwarded to `docker create`
 - Re-attach: running → attach, stopped → start -ai, none → create + seed + start
+- Runtime detection: prefers `docker`, falls back to `podman`; all commands use `$DOCKER` variable

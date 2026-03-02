@@ -1,0 +1,45 @@
+name: Integration tests
+
+on:
+  pull_request:
+    paths:
+      - 'cage.sh'
+      - 'tests/**'
+      - '.github/workflows/integration.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'cage.sh'
+      - 'tests/**'
+      - '.github/workflows/integration.yml'
+  workflow_dispatch:
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [docker, podman]
+    name: integration (${{ matrix.runtime }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Podman
+        if: matrix.runtime == 'podman'
+        run: |
+          # Remove all docker packages so cage.sh falls back to podman.
+          sudo apt-get remove -y moby-cli moby-engine docker.io docker-ce-cli docker-ce 2>/dev/null || true
+          # Remove any leftover docker binary.
+          sudo rm -f "$(command -v docker 2>/dev/null)" || true
+          sudo apt-get install -y podman
+          # Verify podman works and docker is gone.
+          podman --version
+          ! command -v docker
+
+      - name: Verify Docker
+        if: matrix.runtime == 'docker'
+        run: docker --version
+
+      - name: Run integration tests
+        run: bash tests/test_integration.sh

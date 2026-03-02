@@ -329,6 +329,24 @@ test_docker_not_running_error() {
     assert_contains "$out" "Docker is not running" "error message"
 }
 
+test_podman_fallback() {
+    # When docker is absent but podman exists, cage.sh should use podman.
+    mock_reset
+    # Hide the mock docker and create a mock podman instead.
+    mv "$MOCK_DIR/docker" "$MOCK_DIR/docker.bak"
+    cp "$MOCK_DIR/docker.bak" "$MOCK_DIR/podman"
+    chmod +x "$MOCK_DIR/podman"
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    # cage.sh detects podman, so DOCKER=podman, and all calls go to $MOCK_DIR/podman
+    # which uses the same mock infrastructure (reads MOCK_DIR relative to itself).
+    local out; out="$(run_cage status 2>&1)"
+    assert_contains "$out" "State:" "podman fallback works"
+    # Restore mock docker.
+    mv "$MOCK_DIR/docker.bak" "$MOCK_DIR/docker"
+    rm -f "$MOCK_DIR/podman"
+}
+
 # ================================================================
 # Tests: container_state  (via cmd_status)
 # ================================================================
@@ -1179,6 +1197,7 @@ main() {
     echo ""
     echo "--- ensure_docker ---"
     run_test test_docker_not_running_error
+    run_test test_podman_fallback
 
     echo ""
     echo "--- container_state (via status) ---"
