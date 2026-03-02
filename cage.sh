@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.4.0"
+VERSION="0.4.1"
 IMAGE="${CAGE_IMAGE:-ghcr.io/pacificsky/devcontainer-lite:latest}"
 HOME_VOL="cage-home"
 
@@ -72,6 +72,25 @@ check_colima_ssh_agent() {
     info "Fix: colima stop && colima start --ssh-agent"
 }
 
+# Copy seed files from ~/.config/cage/home/ into the container's /home/vscode/.
+# Uses cp -n (no-clobber) so existing files in the volume are never overwritten.
+# The container must be in "created" (stopped) state.  This function starts
+# it (detached) so docker exec can run, and returns 0.  If there is nothing
+# to seed it returns 1 and leaves the container stopped.
+seed_home() {
+    local name="$1"
+    local seed_dir="$HOME/.config/cage/home"
+
+    [ -d "$seed_dir" ] || return 1
+    [ -n "$(ls -A "$seed_dir" 2>/dev/null)" ] || return 1
+
+    info "Seeding home directory from $seed_dir"
+    docker cp "$seed_dir/." "$name:/tmp/cage-seed"
+    docker start "$name"
+    docker exec "$name" sh -c 'cp -rn /tmp/cage-seed/. /home/vscode/ && rm -rf /tmp/cage-seed'
+    return 0
+}
+
 # --- Subcommands ---
 
 cmd_enter() {
@@ -136,7 +155,7 @@ cmd_enter() {
                 )
             fi
 
-            docker run -it \
+            docker create -it \
                 --name "$name" \
                 --hostname "$name" \
                 --workdir "$project_dir" \
@@ -144,7 +163,13 @@ cmd_enter() {
                 "${mount_args[@]}" \
                 ${ssh_agent_args[@]+"${ssh_agent_args[@]}"} \
                 -l "cage.project=${project_dir}" \
-                "$IMAGE"
+                "$IMAGE" >/dev/null
+
+            if seed_home "$name"; then
+                docker attach "$name"
+            else
+                docker start -ai "$name"
+            fi
             ;;
     esac
 }
@@ -332,6 +357,9 @@ Commands:
 
 Environment:
   CAGE_IMAGE    Override container image (default: ghcr.io/pacificsky/devcontainer-lite:latest)
+
+Seed directory:
+  ~/.config/cage/home/    Files copied (no-clobber) into /home/vscode/ on new containers
 
 Port (-p) and volume (-v) flags only apply when creating a new container.
 To change: cage.sh rm && cage.sh start -p 3000:3000 -v /data:/data

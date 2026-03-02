@@ -48,9 +48,13 @@ Deterministic: `cage-<dirname>-<8char-sha256-of-absolute-path>`. Example: `/User
 - `CAGE_IMAGE` — override container image (default: `ghcr.io/pacificsky/devcontainer-lite:latest`)
 - `DOCKER_CONTEXT` — override Docker context if needed
 
+### Seed Directory
+
+`~/.config/cage/home/` contents are copied into `/home/vscode/` on new container creation using `cp -n` (no-clobber). Existing files in the shared volume are never overwritten. The seed runs on every path that creates a new container: `start` (new), `restart`, and `upgrade`.
+
 ### Key Design Decisions
 
 - CWD = project dir (no git-root detection)
 - Docker label `cage.project=$PROJECT_DIR` on each container for listing
-- Port flags (`-p`) collected before subcommand, forwarded to `docker run`
-- Re-attach: running → attach, stopped → start -ai, none → run
+- Port flags (`-p`) collected before subcommand, forwarded to `docker create`
+- Re-attach: running → attach, stopped → start -ai, none → create + seed + start
