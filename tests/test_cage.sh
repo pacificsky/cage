@@ -794,19 +794,72 @@ test_update_pulls_image() {
     mock_reset
     mock_docker_response "info" 0 ""
     mock_docker_response "pull" 0 ""
-    mock_docker_response "inspect" 1 ""   # no existing container
     local out; out="$(run_cage update 2>&1)"
     assert_contains "$out" "Pulling latest image" "pulls message"
     assert_eq "1" "$(mock_call_count pull)" "docker pull called"
+    assert_eq "0" "$(mock_call_count inspect)" "no container inspect"
+    assert_eq "0" "$(mock_call_count run)" "no docker run"
 }
 
-test_update_no_existing_container() {
+# ================================================================
+# Tests: cmd_upgrade
+# ================================================================
+
+test_upgrade_rejects_local_image() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    local out rc=0
+    out="$(CAGE_IMAGE="local-only" run_cage upgrade 2>&1)" || rc=$?
+    assert_eq "1" "$rc" "exit code"
+    assert_contains "$out" "Cannot update local image" "error message"
+}
+
+test_upgrade_pulls_and_recreates_when_newer() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "pull" 0 ""
+    # First inspect: container exists (running)
+    mock_docker_response_n "inspect" 1 0 "true"
+    # image inspect returns different ID → newer available
+    mock_docker_response_n "inspect" 2 0 "sha256:old"
+    mock_docker_response "image" 0 "sha256:new"
+    mock_docker_response "rm" 0 ""
+    # After rm, cmd_enter inspect: container gone → create new
+    mock_docker_response_n "inspect" 3 1 ""
+    mock_docker_response "run" 0 ""
+    local out; out="$(run_cage upgrade 2>&1)"
+    assert_contains "$out" "Pulling latest image" "pulls image"
+    # pull called twice: once in cmd_update, once in cmd_enter (creating new container)
+    assert_eq "2" "$(mock_call_count pull)" "docker pull called"
+    assert_contains "$out" "Removing old container" "removes old container"
+    assert_eq "1" "$(mock_call_count run)" "docker run called"
+}
+
+test_upgrade_pulls_no_recreate_when_current() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "pull" 0 ""
+    # Container exists (running)
+    mock_docker_response_n "inspect" 1 0 "true"
+    # image_newer_available: container image and latest image are same
+    mock_docker_response_n "inspect" 2 0 "sha256:same"
+    mock_docker_response "image" 0 "sha256:same"
+    local out; out="$(run_cage upgrade 2>&1)"
+    assert_contains "$out" "Pulling latest image" "pulls image"
+    assert_contains "$out" "already on the latest image" "already up to date"
+    assert_eq "0" "$(mock_call_count rm)" "no docker rm"
+    assert_eq "0" "$(mock_call_count run)" "no docker run"
+}
+
+test_upgrade_no_existing_container() {
     mock_reset
     mock_docker_response "info" 0 ""
     mock_docker_response "pull" 0 ""
     mock_docker_response "inspect" 1 ""
-    local out; out="$(run_cage update 2>&1)"
+    local out; out="$(run_cage upgrade 2>&1)"
+    assert_contains "$out" "Pulling latest image" "pulls image"
     assert_contains "$out" "No existing container" "info message"
+    assert_eq "0" "$(mock_call_count rm)" "no docker rm"
     assert_eq "0" "$(mock_call_count run)" "no docker run"
 }
 
@@ -821,7 +874,7 @@ test_start_running_hints_newer_image() {
     mock_docker_response "image" 0 "sha256:new"
     mock_docker_response "attach" 0 ""
     local out; out="$(run_cage start 2>&1)"
-    assert_contains "$out" "newer image is available" "upgrade hint shown"
+    assert_contains "$out" "cage upgrade" "upgrade hint shown"
 }
 
 # ================================================================
@@ -1079,7 +1132,13 @@ main() {
     echo "--- cmd_update ---"
     run_test test_update_rejects_local_image
     run_test test_update_pulls_image
-    run_test test_update_no_existing_container
+
+    echo ""
+    echo "--- cmd_upgrade ---"
+    run_test test_upgrade_rejects_local_image
+    run_test test_upgrade_pulls_and_recreates_when_newer
+    run_test test_upgrade_pulls_no_recreate_when_current
+    run_test test_upgrade_no_existing_container
 
     echo ""
     echo "--- image upgrade hint ---"

@@ -90,7 +90,7 @@ cmd_enter() {
                 info "Container already exists — ignoring -p flags. Use 'cage.sh rm' to recreate with new ports."
             fi
             if image_newer_available "$name"; then
-                info "A newer image is available. Run 'cage.sh update' to upgrade."
+                info "A newer image is available. Run 'cage upgrade' to upgrade."
             fi
             info "Re-attaching to $name"
             docker attach "$name"
@@ -100,7 +100,7 @@ cmd_enter() {
                 info "Container already exists — ignoring -p flags. Use 'cage.sh rm' to recreate with new ports."
             fi
             if image_newer_available "$name"; then
-                info "A newer image is available. Run 'cage.sh update' to upgrade."
+                info "A newer image is available. Run 'cage upgrade' to upgrade."
             fi
             info "Restarting $name"
             docker start -ai "$name"
@@ -283,17 +283,18 @@ cmd_restart() {
 }
 
 cmd_update() {
-    local project_dir="$1"
-    local name
-    name="$(container_name "$project_dir")"
-
     if [[ "$IMAGE" != */* ]]; then
         die "Cannot update local image '$IMAGE'. Pull or build it manually."
     fi
-
     info "Pulling latest image..."
     docker pull "$IMAGE"
+}
 
+cmd_upgrade() {
+    local project_dir="$1"
+    cmd_update
+    local name
+    name="$(container_name "$project_dir")"
     local state
     state="$(container_state "$name")"
     if [ "$state" != "none" ]; then
@@ -306,7 +307,7 @@ cmd_update() {
             info "Container is already on the latest image."
         fi
     else
-        info "No existing container. Use 'cage.sh start' to create one."
+        info "No existing container. Use 'cage start' to create one."
     fi
 }
 
@@ -322,10 +323,11 @@ Commands:
   status    Show container name, state, and port mappings
   list      List all cage containers
   shell     Open additional bash shell in running container
-  restart   Remove and recreate container (volumes preserved)
-  obliterate Remove all cage containers and shared home volume
-  rmconfig  Stop all containers and remove shared home volume
-  update    Pull latest image and recreate container
+  restart   Remove and recreate container (shared home volume preserved)
+  obliterate Destroy shared home volume and all cage containers (caution!!!)
+  rmconfig  Stop all containers and remove shared home volume (containers are preserved, but will be recreated with fresh home on next start)
+  update    Pull latest container image
+  upgrade   Pull latest image and recreate container
   help      Show this help
 
 Environment:
@@ -380,7 +382,8 @@ main() {
         restart) ensure_docker; cmd_restart "$project_dir" ;;
         obliterate) ensure_docker; cmd_obliterate ;;
         rmconfig) ensure_docker; cmd_rmconfig ;;
-        update) ensure_docker; cmd_update "$project_dir" ;;
+        update) ensure_docker; cmd_update ;;
+        upgrade) ensure_docker; cmd_upgrade "$project_dir" ;;
         *)      die "Unknown command: $cmd. Run 'cage.sh help' for usage." ;;
     esac
 }
