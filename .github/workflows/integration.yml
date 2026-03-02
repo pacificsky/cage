@@ -28,8 +28,10 @@ jobs:
       - name: Set up Podman
         if: matrix.runtime == 'podman'
         run: |
-          # Remove docker so cage.sh falls back to podman.
-          sudo apt-get remove -y moby-cli moby-engine docker.io 2>/dev/null || true
+          # Remove all docker packages so cage.sh falls back to podman.
+          sudo apt-get remove -y moby-cli moby-engine docker.io docker-ce-cli docker-ce 2>/dev/null || true
+          # Remove any leftover docker binary.
+          sudo rm -f "$(command -v docker 2>/dev/null)" || true
           sudo apt-get install -y podman
           # Verify podman works and docker is gone.
           podman --version
