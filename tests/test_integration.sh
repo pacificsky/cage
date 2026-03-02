@@ -116,11 +116,20 @@ make_project_dir() {
     echo "$d"
 }
 
-# Run cage.sh from a given project dir.
+# Run cage.sh from a given project dir (non-interactive commands only).
 run_cage_in() {
     local project_dir="$1"
     shift
     (cd "$project_dir" && bash "$CAGE_SH" "$@" 2>&1)
+}
+
+# Start/restart a cage container in CI.  These commands attach to an
+# interactive shell, so we use timeout to let the container come up
+# and then kill the attach process.  The container keeps running.
+start_cage_in() {
+    local project_dir="$1"
+    shift
+    (cd "$project_dir" && timeout 10 bash "$CAGE_SH" "$@" </dev/null 2>&1) || true
 }
 
 # Compute the expected container name (mirrors cage.sh logic).
@@ -176,9 +185,8 @@ test_create_and_status() {
     local pdir; pdir="$(make_project_dir)"
     local name; name="$(container_name_for "$pdir")"
 
-    # Create container (non-interactive — it will exit immediately since ubuntu
-    # has no long-running entrypoint, but the container gets created).
-    run_cage_in "$pdir" start </dev/null || true
+    # Create container (timeout kills the interactive attach after creation).
+    start_cage_in "$pdir" start
 
     # Status should show the container.
     local out
@@ -194,7 +202,7 @@ test_stop_container() {
     local pdir; pdir="$(make_project_dir)"
     local name; name="$(container_name_for "$pdir")"
 
-    run_cage_in "$pdir" start </dev/null || true
+    start_cage_in "$pdir" start
 
     local out
     out="$(run_cage_in "$pdir" stop 2>&1)" || true
@@ -210,7 +218,7 @@ test_rm_container() {
     local pdir; pdir="$(make_project_dir)"
     local name; name="$(container_name_for "$pdir")"
 
-    run_cage_in "$pdir" start </dev/null || true
+    start_cage_in "$pdir" start
     run_cage_in "$pdir" rm || true
 
     local out
@@ -225,7 +233,7 @@ test_project_dir_mounted() {
     # Write a file in the project dir.
     echo "hello from host" > "$pdir/testfile.txt"
 
-    run_cage_in "$pdir" start </dev/null || true
+    start_cage_in "$pdir" start
 
     # The container may have exited, so start it briefly to exec.
     $DOCKER start "$name" >/dev/null 2>&1 || true
@@ -240,7 +248,7 @@ test_shared_home_volume_persists() {
     local pdir; pdir="$(make_project_dir)"
     local name; name="$(container_name_for "$pdir")"
 
-    run_cage_in "$pdir" start </dev/null || true
+    start_cage_in "$pdir" start
 
     # Write a file to /home/vscode inside the container.
     $DOCKER start "$name" >/dev/null 2>&1 || true
@@ -248,7 +256,7 @@ test_shared_home_volume_persists() {
 
     # Remove and recreate the container.
     run_cage_in "$pdir" rm || true
-    run_cage_in "$pdir" start </dev/null || true
+    start_cage_in "$pdir" start
 
     # File should still be there (shared volume survives rm).
     $DOCKER start "$name" >/dev/null 2>&1 || true
@@ -267,7 +275,7 @@ test_seed_directory() {
     mkdir -p "$HOME/.config/cage/home/.claude"
     echo '{"seed": true}' > "$HOME/.config/cage/home/.claude/settings.json"
 
-    run_cage_in "$pdir" start </dev/null || true
+    start_cage_in "$pdir" start
 
     # Check that the seed file landed.
     $DOCKER start "$name" >/dev/null 2>&1 || true
@@ -284,7 +292,7 @@ test_seed_no_clobber() {
     local name; name="$(container_name_for "$pdir")"
 
     # Create container and write a file to /home/vscode that will conflict with seed.
-    run_cage_in "$pdir" start </dev/null || true
+    start_cage_in "$pdir" start
     $DOCKER start "$name" >/dev/null 2>&1 || true
     $DOCKER exec "$name" sh -c 'mkdir -p /home/vscode/.claude && echo "user-custom" > /home/vscode/.claude/settings.json' 2>/dev/null
 
@@ -294,7 +302,7 @@ test_seed_no_clobber() {
 
     # Recreate the container — seed should NOT overwrite the user's file.
     run_cage_in "$pdir" rm || true
-    run_cage_in "$pdir" start </dev/null || true
+    start_cage_in "$pdir" start
 
     $DOCKER start "$name" >/dev/null 2>&1 || true
     local content
@@ -309,7 +317,7 @@ test_list_shows_container() {
     local pdir; pdir="$(make_project_dir)"
     local name; name="$(container_name_for "$pdir")"
 
-    run_cage_in "$pdir" start </dev/null || true
+    start_cage_in "$pdir" start
 
     local out
     out="$(run_cage_in "$pdir" list)"
@@ -322,13 +330,13 @@ test_restart_recreates() {
     local pdir; pdir="$(make_project_dir)"
     local name; name="$(container_name_for "$pdir")"
 
-    run_cage_in "$pdir" start </dev/null || true
+    start_cage_in "$pdir" start
 
     # Get container ID before restart.
     local id_before
     id_before="$($DOCKER inspect -f '{{.Id}}' "$name" 2>/dev/null)" || true
 
-    run_cage_in "$pdir" restart </dev/null || true
+    start_cage_in "$pdir" restart
 
     # Container should exist with a different ID.
     local id_after
@@ -347,8 +355,8 @@ test_obliterate_removes_all() {
     local name1; name1="$(container_name_for "$pdir1")"
     local name2; name2="$(container_name_for "$pdir2")"
 
-    run_cage_in "$pdir1" start </dev/null || true
-    run_cage_in "$pdir2" start </dev/null || true
+    start_cage_in "$pdir1" start
+    start_cage_in "$pdir2" start
 
     # Obliterate from any project dir.
     run_cage_in "$pdir1" obliterate || true
