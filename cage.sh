@@ -171,6 +171,7 @@ cmd_enter() {
                 ${port_flags[@]+"${port_flags[@]}"} \
                 "${mount_args[@]}" \
                 ${ssh_agent_args[@]+"${ssh_agent_args[@]}"} \
+                -e UV_PROJECT_ENVIRONMENT=.cage-venv \
                 -l "cage.project=${project_dir}" \
                 "$IMAGE" >/dev/null
 
