@@ -285,7 +285,7 @@ cmd_status() {
 }
 
 cmd_list() {
-    local format='table {{.Names}}\t{{.Status}}\t{{.Label "cage.project"}}'
+    local format='table {{.Names}}\t{{.Status}}\t{{.Labels}}'
     $DOCKER ps -a --filter "label=cage.project" --format "$format"
 }
 

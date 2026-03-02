@@ -336,6 +336,9 @@ test_restart_recreates() {
     local id_before
     id_before="$($DOCKER inspect -f '{{.Id}}' "$name" 2>/dev/null)" || true
 
+    # Stop first so rm -f during restart is instant (avoids podman's 10s SIGTERM wait).
+    $DOCKER stop "$name" >/dev/null 2>&1 || true
+
     start_cage_in "$pdir" restart
 
     # Container should exist with a different ID.
