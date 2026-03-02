@@ -300,13 +300,13 @@ test_help_long_flag() {
     local out; out="$(run_cage --help)";  assert_contains "$out" "Usage:"
 }
 test_version_V() {
-    local out; out="$(run_cage -V)";      assert_contains "$out" "cage 0.4.0"
+    local out; out="$(run_cage -V)";      assert_contains "$out" "cage 0.4.1"
 }
 test_version_long() {
-    local out; out="$(run_cage --version)"; assert_contains "$out" "cage 0.4.0"
+    local out; out="$(run_cage --version)"; assert_contains "$out" "cage 0.4.1"
 }
 test_version_command() {
-    local out; out="$(run_cage version)"; assert_contains "$out" "cage 0.4.0"
+    local out; out="$(run_cage version)"; assert_contains "$out" "cage 0.4.1"
 }
 
 test_unknown_command_fails() {
@@ -447,16 +447,17 @@ test_rm_no_container() {
 # Tests: cmd_enter  (start subcommand)
 # ================================================================
 
-test_start_new_container_pulls_and_runs() {
+test_start_new_container_pulls_and_creates() {
     mock_reset
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
     mock_docker_response "pull" 0 ""
-    mock_docker_response "run" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
     local out; out="$(run_cage start 2>&1)"
     assert_contains "$out" "Pulling latest image" "pulls image"
     assert_contains "$out" "Creating" "creating message"
-    assert_eq "1" "$(mock_call_count run)" "docker run called"
+    assert_eq "1" "$(mock_call_count create)" "docker create called"
     assert_eq "1" "$(mock_call_count pull)" "docker pull called"
 }
 
@@ -502,14 +503,15 @@ test_start_ignores_port_flags_when_stopped() {
     assert_contains "$out" "ignoring -p flags" "port-ignored warning"
 }
 
-test_start_passes_port_to_docker_run() {
+test_start_passes_port_to_docker_create() {
     mock_reset
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
     mock_docker_response "pull" 0 ""
-    mock_docker_response "run" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
     run_cage start -p 3000:3000 2>&1 >/dev/null || true
-    assert_contains "$(mock_calls)" "-p 3000:3000" "port flag in docker run"
+    assert_contains "$(mock_calls)" "-p 3000:3000" "port flag in docker create"
 }
 
 test_start_multiple_ports() {
@@ -517,7 +519,8 @@ test_start_multiple_ports() {
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
     mock_docker_response "pull" 0 ""
-    mock_docker_response "run" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
     run_cage start -p 3000:3000 -p 8080:8080 2>&1 >/dev/null || true
     local calls; calls="$(mock_calls)"
     assert_contains "$calls" "-p 3000:3000" "first port"
@@ -529,9 +532,10 @@ test_start_volume_flag() {
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
     mock_docker_response "pull" 0 ""
-    mock_docker_response "run" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
     run_cage start -v /data:/data 2>&1 >/dev/null || true
-    assert_contains "$(mock_calls)" "-v /data:/data" "volume flag in docker run"
+    assert_contains "$(mock_calls)" "-v /data:/data" "volume flag in docker create"
 }
 
 test_start_mixed_port_and_volume() {
@@ -539,7 +543,8 @@ test_start_mixed_port_and_volume() {
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
     mock_docker_response "pull" 0 ""
-    mock_docker_response "run" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
     run_cage start -p 3000:3000 -v /data:/data -p 8080:8080 2>&1 >/dev/null || true
     local calls; calls="$(mock_calls)"
     assert_contains "$calls" "-p 3000:3000" "port flag"
@@ -578,19 +583,21 @@ test_start_no_pull_for_local_image() {
     mock_reset
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
-    mock_docker_response "run" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
     local out
     out="$(CAGE_IMAGE="my-local-image" run_cage start 2>&1)"
     assert_not_contains "$out" "Pulling" "no pull for local image"
     assert_eq "0" "$(mock_call_count pull)" "docker pull not called"
 }
 
-test_start_docker_run_mounts() {
+test_start_docker_create_mounts() {
     mock_reset
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
     mock_docker_response "pull" 0 ""
-    mock_docker_response "run" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
     run_cage start 2>&1 >/dev/null || true
     local calls; calls="$(mock_calls)"
     local pdir; pdir="$(pwd)"
@@ -607,7 +614,8 @@ test_start_container_hostname() {
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
     mock_docker_response "pull" 0 ""
-    mock_docker_response "run" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
     run_cage start 2>&1 >/dev/null || true
     local calls; calls="$(mock_calls)"
     local expected_name; expected_name="$(expected_container_name)"
@@ -620,9 +628,10 @@ test_start_cage_image_override() {
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
     mock_docker_response "pull" 0 ""
-    mock_docker_response "run" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
     CAGE_IMAGE="custom/img:v2" run_cage start 2>&1 >/dev/null || true
-    assert_contains "$(mock_calls)" "custom/img:v2" "custom image in docker run"
+    assert_contains "$(mock_calls)" "custom/img:v2" "custom image in docker create"
 }
 
 # ================================================================
@@ -761,10 +770,11 @@ test_restart_existing_container() {
     # Second inspect in cmd_enter: container gone → create new
     mock_docker_response_n "inspect" 2 1 ""
     mock_docker_response "pull" 0 ""
-    mock_docker_response "run" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
     local out; out="$(run_cage restart 2>&1)"
     assert_contains "$(mock_calls)" "rm -f" "old container removed"
-    assert_eq "1" "$(mock_call_count run)" "new container created"
+    assert_eq "1" "$(mock_call_count create)" "new container created"
 }
 
 test_restart_no_container() {
@@ -798,7 +808,7 @@ test_update_pulls_image() {
     assert_contains "$out" "Pulling latest image" "pulls message"
     assert_eq "1" "$(mock_call_count pull)" "docker pull called"
     assert_eq "0" "$(mock_call_count inspect)" "no container inspect"
-    assert_eq "0" "$(mock_call_count run)" "no docker run"
+    assert_eq "0" "$(mock_call_count create)" "no docker create"
 }
 
 # ================================================================
@@ -826,13 +836,14 @@ test_upgrade_pulls_and_recreates_when_newer() {
     mock_docker_response "rm" 0 ""
     # After rm, cmd_enter inspect: container gone → create new
     mock_docker_response_n "inspect" 3 1 ""
-    mock_docker_response "run" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
     local out; out="$(run_cage upgrade 2>&1)"
     assert_contains "$out" "Pulling latest image" "pulls image"
     # pull called twice: once in cmd_update, once in cmd_enter (creating new container)
     assert_eq "2" "$(mock_call_count pull)" "docker pull called"
     assert_contains "$out" "Removing old container" "removes old container"
-    assert_eq "1" "$(mock_call_count run)" "docker run called"
+    assert_eq "1" "$(mock_call_count create)" "docker create called"
 }
 
 test_upgrade_pulls_no_recreate_when_current() {
@@ -848,7 +859,7 @@ test_upgrade_pulls_no_recreate_when_current() {
     assert_contains "$out" "Pulling latest image" "pulls image"
     assert_contains "$out" "already on the latest image" "already up to date"
     assert_eq "0" "$(mock_call_count rm)" "no docker rm"
-    assert_eq "0" "$(mock_call_count run)" "no docker run"
+    assert_eq "0" "$(mock_call_count create)" "no docker create"
 }
 
 test_upgrade_no_existing_container() {
@@ -860,7 +871,7 @@ test_upgrade_no_existing_container() {
     assert_contains "$out" "Pulling latest image" "pulls image"
     assert_contains "$out" "No existing container" "info message"
     assert_eq "0" "$(mock_call_count rm)" "no docker rm"
-    assert_eq "0" "$(mock_call_count run)" "no docker run"
+    assert_eq "0" "$(mock_call_count create)" "no docker create"
 }
 
 # ================================================================
@@ -888,7 +899,8 @@ test_start_ssh_agent_linux() {
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
     mock_docker_response "pull" 0 ""
-    mock_docker_response "run" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
 
     # Mock uname to report Linux (test may run on macOS).
     cat > "$MOCK_DIR/uname" <<'UNAME_SCRIPT'
@@ -919,7 +931,8 @@ test_start_ssh_no_agent() {
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
     mock_docker_response "pull" 0 ""
-    mock_docker_response "run" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
 
     # Mock uname to report Linux (test may run on macOS).
     cat > "$MOCK_DIR/uname" <<'UNAME_SCRIPT'
@@ -985,7 +998,8 @@ test_start_ssh_macos_uses_vm_socket() {
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
     mock_docker_response "pull" 0 ""
-    mock_docker_response "run" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
     setup_colima_env true
 
     SSH_AUTH_SOCK="/tmp/not-a-real-socket" run_cage start 2>&1 >/dev/null || true
@@ -1002,7 +1016,8 @@ test_start_colima_warns_no_ssh_agent() {
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
     mock_docker_response "pull" 0 ""
-    mock_docker_response "run" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
     setup_colima_env false
 
     local out
@@ -1018,7 +1033,8 @@ test_start_colima_no_warn_when_forwarding_enabled() {
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
     mock_docker_response "pull" 0 ""
-    mock_docker_response "run" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
     setup_colima_env true
 
     local out
@@ -1026,6 +1042,108 @@ test_start_colima_no_warn_when_forwarding_enabled() {
     assert_not_contains "$out" "SSH agent forwarding enabled" "no warning when forwarding on"
     assert_not_contains "$out" "colima start --ssh-agent" "no fix suggestion"
     teardown_colima_env
+}
+
+# ================================================================
+# Tests: seed_home (home directory seeding)
+# ================================================================
+
+test_start_seeds_home_when_seed_dir_exists() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "cp" 0 ""
+    mock_docker_response "start" 0 ""
+    mock_docker_response "exec" 0 ""
+    mock_docker_response "attach" 0 ""
+
+    mkdir -p "$HOME/.config/cage/home/.claude"
+    echo '{}' > "$HOME/.config/cage/home/.claude/settings.json"
+
+    local out; out="$(run_cage start 2>&1)"
+    assert_contains "$out" "Seeding home directory" "seeding info message"
+    assert_eq "1" "$(mock_call_count create)" "docker create called"
+    assert_eq "1" "$(mock_call_count cp)" "docker cp called"
+    assert_eq "1" "$(mock_call_count exec)" "docker exec called"
+    assert_eq "1" "$(mock_call_count start)" "docker start called (detached)"
+    assert_eq "1" "$(mock_call_count attach)" "docker attach called"
+
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "/tmp/cage-seed" "seed temp dir used"
+    assert_contains "$calls" "cp -rn /tmp/cage-seed/. /home/vscode/" "cp -rn in exec"
+
+    rm -rf "$HOME/.config/cage/home"
+}
+
+test_start_skips_seed_when_no_seed_dir() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+
+    rm -rf "$HOME/.config/cage/home"
+
+    local out; out="$(run_cage start 2>&1)"
+    assert_not_contains "$out" "Seeding" "no seeding message"
+    assert_eq "0" "$(mock_call_count cp)" "docker cp NOT called"
+    assert_eq "0" "$(mock_call_count exec)" "docker exec NOT called"
+    assert_eq "1" "$(mock_call_count create)" "docker create called"
+    assert_eq "1" "$(mock_call_count start)" "docker start called"
+}
+
+test_start_skips_seed_when_seed_dir_empty() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+
+    mkdir -p "$HOME/.config/cage/home"
+
+    local out; out="$(run_cage start 2>&1)"
+    assert_not_contains "$out" "Seeding" "no seeding message for empty dir"
+    assert_eq "0" "$(mock_call_count cp)" "docker cp NOT called"
+    assert_eq "0" "$(mock_call_count exec)" "docker exec NOT called"
+
+    rm -rf "$HOME/.config/cage/home"
+}
+
+test_reattach_does_not_seed() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 0 "true"
+    mock_docker_response "image" 1 ""
+    mock_docker_response "attach" 0 ""
+
+    mkdir -p "$HOME/.config/cage/home/.claude"
+    echo '{}' > "$HOME/.config/cage/home/.claude/settings.json"
+
+    run_cage start 2>&1 >/dev/null || true
+    assert_eq "0" "$(mock_call_count cp)" "docker cp NOT called on reattach"
+    assert_eq "1" "$(mock_call_count attach)" "docker attach called"
+
+    rm -rf "$HOME/.config/cage/home"
+}
+
+test_restart_stopped_does_not_seed() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 0 "false"
+    mock_docker_response "image" 1 ""
+    mock_docker_response "start" 0 ""
+
+    mkdir -p "$HOME/.config/cage/home/.claude"
+    echo '{}' > "$HOME/.config/cage/home/.claude/settings.json"
+
+    run_cage start 2>&1 >/dev/null || true
+    assert_eq "0" "$(mock_call_count cp)" "docker cp NOT called on restart"
+
+    rm -rf "$HOME/.config/cage/home"
 }
 
 # ================================================================
@@ -1084,12 +1202,12 @@ main() {
 
     echo ""
     echo "--- cmd_enter (start) ---"
-    run_test test_start_new_container_pulls_and_runs
+    run_test test_start_new_container_pulls_and_creates
     run_test test_start_reattach_running
     run_test test_start_restart_stopped
     run_test test_start_ignores_port_flags_when_running
     run_test test_start_ignores_port_flags_when_stopped
-    run_test test_start_passes_port_to_docker_run
+    run_test test_start_passes_port_to_docker_create
     run_test test_start_multiple_ports
     run_test test_start_volume_flag
     run_test test_start_mixed_port_and_volume
@@ -1097,7 +1215,7 @@ main() {
     run_test test_start_v_missing_arg
     run_test test_start_unknown_flag
     run_test test_start_no_pull_for_local_image
-    run_test test_start_docker_run_mounts
+    run_test test_start_docker_create_mounts
     run_test test_start_container_hostname
     run_test test_start_cage_image_override
 
@@ -1151,6 +1269,14 @@ main() {
     run_test test_start_ssh_macos_uses_vm_socket
     run_test test_start_colima_warns_no_ssh_agent
     run_test test_start_colima_no_warn_when_forwarding_enabled
+
+    echo ""
+    echo "--- seed_home (home directory seeding) ---"
+    run_test test_start_seeds_home_when_seed_dir_exists
+    run_test test_start_skips_seed_when_no_seed_dir
+    run_test test_start_skips_seed_when_seed_dir_empty
+    run_test test_reattach_does_not_seed
+    run_test test_restart_stopped_does_not_seed
 
     print_summary
 }
