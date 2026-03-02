@@ -1,6 +1,11 @@
 name: Integration tests
 
 on:
+  pull_request:
+    paths:
+      - 'cage.sh'
+      - 'tests/**'
+      - '.github/workflows/integration.yml'
   push:
     branches: [main]
     paths:
