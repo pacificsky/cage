@@ -288,7 +288,7 @@ cmd_status() {
 cmd_list() {
     printf "%-35s %-25s %s\n" "NAMES" "STATUS" "PROJECT"
     $DOCKER ps -a --filter "label=cage.project" \
-        --format '{{.Names}}\t{{.Status}}\t{{.Label "cage.project"}}' |
+        --format '{{.Names}}\t{{.Status}}\t{{index .Labels "cage.project"}}' |
         while IFS=$'\t' read -r name status project; do
             printf "%-35s %-25s %s\n" "$name" "$status" "$project"
         done
