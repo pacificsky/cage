@@ -177,14 +177,22 @@ teardown_mock() {
 #   mock_docker_response <subcmd> <exit_code> [stdout_text]
 mock_docker_response() {
     local subcmd="$1" exit_code="$2" output="${3:-}"
-    printf '%s\n%s' "$exit_code" "$output" > "$MOCK_RESPONSES_DIR/$subcmd"
+    if [ -n "$output" ]; then
+        printf '%s\n%s\n' "$exit_code" "$output" > "$MOCK_RESPONSES_DIR/$subcmd"
+    else
+        printf '%s\n' "$exit_code" > "$MOCK_RESPONSES_DIR/$subcmd"
+    fi
 }
 
 # Set the response for the Nth invocation of a docker subcommand.
 #   mock_docker_response_n <subcmd> <N> <exit_code> [stdout_text]
 mock_docker_response_n() {
     local subcmd="$1" n="$2" exit_code="$3" output="${4:-}"
-    printf '%s\n%s' "$exit_code" "$output" > "$MOCK_RESPONSES_DIR/${subcmd}_${n}"
+    if [ -n "$output" ]; then
+        printf '%s\n%s\n' "$exit_code" "$output" > "$MOCK_RESPONSES_DIR/${subcmd}_${n}"
+    else
+        printf '%s\n' "$exit_code" > "$MOCK_RESPONSES_DIR/${subcmd}_${n}"
+    fi
 }
 
 # Return all recorded docker invocations (one per line).
@@ -338,9 +346,9 @@ test_podman_fallback() {
     chmod +x "$MOCK_DIR/podman"
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
-    # cage.sh detects podman, so DOCKER=podman, and all calls go to $MOCK_DIR/podman
-    # which uses the same mock infrastructure (reads MOCK_DIR relative to itself).
-    local out; out="$(run_cage status 2>&1)"
+    # Restrict PATH so the real docker (if installed) is not found —
+    # only the mock dir and essential system dirs remain.
+    local out; out="$(PATH="$MOCK_DIR:/usr/bin:/bin" run_cage status 2>&1)"
     assert_contains "$out" "State:" "podman fallback works"
     # Restore mock docker.
     mv "$MOCK_DIR/docker.bak" "$MOCK_DIR/docker"
@@ -693,7 +701,7 @@ test_shell_no_container() {
 test_list_filters_by_label() {
     mock_reset
     mock_docker_response "info" 0 ""
-    mock_docker_response "ps" 0 "cage-app-12345678  Up 2 hours  /home/user/app"
+    mock_docker_response "ps" 0 "$(printf 'cage-app-12345678\tUp 2 hours\t/home/user/app')"
     local out; out="$(run_cage list)"
     assert_contains "$out" "cage-app" "lists cage containers"
     assert_contains "$(mock_calls)" "label=cage.project" "filters by cage.project label"
