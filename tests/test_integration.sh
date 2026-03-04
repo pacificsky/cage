@@ -9,6 +9,17 @@
 
 set -euo pipefail
 
+# Guard: refuse to run on macOS — these tests run obliterate and destroy the
+# shared cage-home volume, which would wipe real user data (Claude config,
+# credentials, shell state) on a developer machine.
+if [ "$(uname -s)" = "Darwin" ]; then
+    echo "error: Integration tests must not run on macOS."
+    echo "       They execute 'obliterate' which destroys the shared cage-home"
+    echo "       volume, deleting all user data across every cage container."
+    echo "       Run these in CI (Linux) instead."
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CAGE_SH="$REPO_DIR/cage.sh"

@@ -286,8 +286,16 @@ cmd_status() {
 }
 
 cmd_list() {
-    local format='table {{.Names}}\t{{.Status}}\t{{.Labels}}'
-    $DOCKER ps -a --filter "label=cage.project" --format "$format"
+    # Docker uses .Label "key"; Podman uses index .Labels "key".
+    local label_tpl='{{.Label "cage.project"}}'
+    [ "$DOCKER" = "podman" ] && label_tpl='{{index .Labels "cage.project"}}'
+
+    printf "%-35s %-25s %s\n" "NAMES" "STATUS" "PROJECT"
+    $DOCKER ps -a --filter "label=cage.project" \
+        --format "{{.Names}}\t{{.Status}}\t${label_tpl}" |
+        while IFS=$'\t' read -r name status project; do
+            printf "%-35s %-25s %s\n" "$name" "$status" "$project"
+        done
 }
 
 cmd_shell() {
