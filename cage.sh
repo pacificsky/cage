@@ -312,7 +312,7 @@ cmd_list() {
         csha="${csha#sha256:}"
         sha_keys+=("$cname")
         sha_vals+=("${csha:0:8}")
-    done < <($DOCKER inspect --format '{{.Name}}\t{{.Image}}' "${names[@]}" 2>/dev/null |
+    done < <($DOCKER inspect --format '{{.Name}}{{"\t"}}{{.Image}}' "${names[@]}" 2>/dev/null |
         sed 's|^/||')
 
     local i
