@@ -10,4 +10,5 @@
 *.swp
 *.swo
 *~
+# Temp file created by test mock docker to record calls (tests/test_cage.sh)
 calls
