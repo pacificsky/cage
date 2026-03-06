@@ -290,11 +290,26 @@ cmd_list() {
     local label_tpl='{{.Label "cage.project"}}'
     [ "$DOCKER" = "podman" ] && label_tpl='{{index .Labels "cage.project"}}'
 
-    printf "%-35s %-25s %s\n" "NAMES" "STATUS" "PROJECT"
+    printf "%-35s %-25s %-20s %s\n" "NAMES" "STATUS" "IMAGE" "PROJECT"
     $DOCKER ps -a --filter "label=cage.project" \
-        --format "{{.Names}}\t{{.Status}}\t${label_tpl}" |
-        while IFS=$'\t' read -r name status project; do
-            printf "%-35s %-25s %s\n" "$name" "$status" "$project"
+        --format "{{.Names}}\t{{.Status}}\t${label_tpl}\t{{.Image}}" |
+        while IFS=$'\t' read -r name status project image; do
+            # Build image descriptor: "tag (short-sha)" from image name and container inspect.
+            local tag="${image##*:}"
+            [ "$tag" = "$image" ] && tag=""
+            local img_sha
+            img_sha="$($DOCKER inspect -f '{{.Image}}' "$name" 2>/dev/null)" || img_sha=""
+            img_sha="${img_sha#sha256:}"
+            img_sha="${img_sha:0:8}"
+            local img_desc
+            if [ -n "$tag" ] && [ -n "$img_sha" ]; then
+                img_desc="${tag} (${img_sha})"
+            elif [ -n "$img_sha" ]; then
+                img_desc="${img_sha}"
+            else
+                img_desc="${image}"
+            fi
+            printf "%-35s %-25s %-20s %s\n" "$name" "$status" "$img_desc" "$project"
         done
 }
 

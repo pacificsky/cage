@@ -701,10 +701,39 @@ test_shell_no_container() {
 test_list_filters_by_label() {
     mock_reset
     mock_docker_response "info" 0 ""
-    mock_docker_response "ps" 0 "$(printf 'cage-app-12345678\tUp 2 hours\t/home/user/app')"
+    mock_docker_response "ps" 0 "$(printf 'cage-app-12345678\tUp 2 hours\t/home/user/app\tghcr.io/pacificsky/devcontainer-lite:latest')"
+    mock_docker_response "inspect" 0 "sha256:abcdef1234567890"
     local out; out="$(run_cage list)"
     assert_contains "$out" "cage-app" "lists cage containers"
     assert_contains "$(mock_calls)" "label=cage.project" "filters by cage.project label"
+}
+
+test_list_shows_image_column_header() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "ps" 0 ""
+    local out; out="$(run_cage list)"
+    assert_contains "$out" "IMAGE" "header includes IMAGE column"
+    assert_contains "$out" "PROJECT" "header includes PROJECT column"
+}
+
+test_list_shows_image_tag_and_sha() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "ps" 0 "$(printf 'cage-app-12345678\tUp 2 hours\t/home/user/app\tghcr.io/pacificsky/devcontainer-lite:20250301')"
+    mock_docker_response "inspect" 0 "sha256:abcdef1234567890faded"
+    local out; out="$(run_cage list)"
+    assert_contains "$out" "20250301" "shows image tag"
+    assert_contains "$out" "abcdef12" "shows short image SHA"
+}
+
+test_list_shows_image_sha_only_when_no_tag() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "ps" 0 "$(printf 'cage-app-12345678\tUp 2 hours\t/home/user/app\tsha256:abcdef1234567890')"
+    mock_docker_response "inspect" 0 "sha256:abcdef1234567890faded"
+    local out; out="$(run_cage list)"
+    assert_contains "$out" "abcdef12" "shows short SHA when no tag"
 }
 
 # ================================================================
@@ -1255,6 +1284,9 @@ main() {
     echo ""
     echo "--- cmd_list ---"
     run_test test_list_filters_by_label
+    run_test test_list_shows_image_column_header
+    run_test test_list_shows_image_tag_and_sha
+    run_test test_list_shows_image_sha_only_when_no_tag
 
     echo ""
     echo "--- cmd_obliterate (global) ---"
