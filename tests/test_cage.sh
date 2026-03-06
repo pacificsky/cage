@@ -340,19 +340,23 @@ test_docker_not_running_error() {
 test_podman_fallback() {
     # When docker is absent but podman exists, cage.sh should use podman.
     mock_reset
-    # Hide the mock docker and create a mock podman instead.
-    mv "$MOCK_DIR/docker" "$MOCK_DIR/docker.bak"
-    cp "$MOCK_DIR/docker.bak" "$MOCK_DIR/podman"
-    chmod +x "$MOCK_DIR/podman"
+    # Create a separate bin dir containing only podman (no docker).
+    local podman_dir="$MOCK_DIR/podman-only"
+    mkdir -p "$podman_dir"
+    cp "$MOCK_DIR/docker" "$podman_dir/podman"
+    chmod +x "$podman_dir/podman"
+    # Symlink essential tools so cage.sh can run (basename, shasum, etc).
+    for cmd in bash printf basename shasum cut grep head tail cat sed xargs; do
+        local cmd_path
+        cmd_path="$(command -v "$cmd" 2>/dev/null)" || true
+        [ -n "$cmd_path" ] && ln -sf "$cmd_path" "$podman_dir/$cmd"
+    done
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
-    # Restrict PATH so the real docker (if installed) is not found —
-    # only the mock dir and essential system dirs remain.
-    local out; out="$(PATH="$MOCK_DIR:/usr/bin:/bin" run_cage status 2>&1)"
+    # Use only podman_dir — docker is absent, so cage.sh falls back to podman.
+    local out; out="$(PATH="$podman_dir" run_cage status 2>&1)"
     assert_contains "$out" "State:" "podman fallback works"
-    # Restore mock docker.
-    mv "$MOCK_DIR/docker.bak" "$MOCK_DIR/docker"
-    rm -f "$MOCK_DIR/podman"
+    rm -rf "$podman_dir"
 }
 
 # ================================================================
@@ -701,10 +705,50 @@ test_shell_no_container() {
 test_list_filters_by_label() {
     mock_reset
     mock_docker_response "info" 0 ""
-    mock_docker_response "ps" 0 "$(printf 'cage-app-12345678\tUp 2 hours\t/home/user/app')"
+    mock_docker_response "ps" 0 "$(printf 'cage-app-12345678\tUp 2 hours\t/home/user/app\tghcr.io/pacificsky/devcontainer-lite:latest')"
+    mock_docker_response "inspect" 0 "$(printf '/cage-app-12345678\tsha256:abcdef1234567890')"
     local out; out="$(run_cage list)"
     assert_contains "$out" "cage-app" "lists cage containers"
     assert_contains "$(mock_calls)" "label=cage.project" "filters by cage.project label"
+}
+
+test_list_shows_image_column_header() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "ps" 0 ""
+    local out; out="$(run_cage list)"
+    assert_contains "$out" "IMAGE" "header includes IMAGE column"
+    assert_contains "$out" "PROJECT" "header includes PROJECT column"
+}
+
+test_list_shows_image_tag_and_sha() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "ps" 0 "$(printf 'cage-app-12345678\tUp 2 hours\t/home/user/app\tghcr.io/pacificsky/devcontainer-lite:20250301')"
+    mock_docker_response "inspect" 0 "$(printf '/cage-app-12345678\tsha256:abcdef1234567890faded')"
+    local out; out="$(run_cage list)"
+    assert_contains "$out" "20250301" "shows image tag"
+    assert_contains "$out" "abcdef12" "shows short image SHA"
+}
+
+test_list_shows_image_sha_only_when_no_tag() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "ps" 0 "$(printf 'cage-app-12345678\tUp 2 hours\t/home/user/app\tubuntu')"
+    mock_docker_response "inspect" 0 "$(printf '/cage-app-12345678\tsha256:abcdef1234567890faded')"
+    local out; out="$(run_cage list)"
+    assert_contains "$out" "abcdef12" "shows short SHA when no tag"
+    assert_not_contains "$out" "ubuntu" "image name not shown as tag"
+}
+
+test_list_handles_registry_port_in_image() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "ps" 0 "$(printf 'cage-app-12345678\tUp 2 hours\t/home/user/app\tregistry.example.com:5000/myapp:v2')"
+    mock_docker_response "inspect" 0 "$(printf '/cage-app-12345678\tsha256:abcdef1234567890faded')"
+    local out; out="$(run_cage list)"
+    assert_contains "$out" "v2" "shows tag from image with registry port"
+    assert_not_contains "$out" "5000" "registry port not treated as tag"
 }
 
 # ================================================================
@@ -1255,6 +1299,10 @@ main() {
     echo ""
     echo "--- cmd_list ---"
     run_test test_list_filters_by_label
+    run_test test_list_shows_image_column_header
+    run_test test_list_shows_image_tag_and_sha
+    run_test test_list_shows_image_sha_only_when_no_tag
+    run_test test_list_handles_registry_port_in_image
 
     echo ""
     echo "--- cmd_obliterate (global) ---"
