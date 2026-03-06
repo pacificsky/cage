@@ -290,27 +290,48 @@ cmd_list() {
     local label_tpl='{{.Label "cage.project"}}'
     [ "$DOCKER" = "podman" ] && label_tpl='{{index .Labels "cage.project"}}'
 
-    printf "%-35s %-25s %-20s %s\n" "NAMES" "STATUS" "IMAGE" "PROJECT"
-    $DOCKER ps -a --filter "label=cage.project" \
-        --format "{{.Names}}\t{{.Status}}\t${label_tpl}\t{{.Image}}" |
-        while IFS=$'\t' read -r name status project image; do
-            # Build image descriptor: "tag (short-sha)" from image name and container inspect.
-            local tag="${image##*:}"
-            [ "$tag" = "$image" ] && tag=""
-            local img_sha
-            img_sha="$($DOCKER inspect -f '{{.Image}}' "$name" 2>/dev/null)" || img_sha=""
-            img_sha="${img_sha#sha256:}"
-            img_sha="${img_sha:0:8}"
-            local img_desc
-            if [ -n "$tag" ] && [ -n "$img_sha" ]; then
-                img_desc="${tag} (${img_sha})"
-            elif [ -n "$img_sha" ]; then
-                img_desc="${img_sha}"
-            else
-                img_desc="${image}"
-            fi
-            printf "%-35s %-25s %-20s %s\n" "$name" "$status" "$img_desc" "$project"
-        done
+    local fmt="%-35s %-25s %-20s %s\n"
+    printf "$fmt" "NAMES" "STATUS" "IMAGE" "PROJECT"
+
+    # Collect container rows from docker ps.
+    local -a names=() statuses=() projects=() images=()
+    while IFS=$'\t' read -r name status project image; do
+        names+=("$name")
+        statuses+=("$status")
+        projects+=("$project")
+        images+=("$image")
+    done < <($DOCKER ps -a --filter "label=cage.project" \
+        --format "{{.Names}}\t{{.Status}}\t${label_tpl}\t{{.Image}}")
+
+    [ ${#names[@]} -eq 0 ] && return 0
+
+    # Batch-fetch image SHAs for all containers in a single inspect call.
+    local -A sha_map=()
+    while IFS=$'\t' read -r cname csha; do
+        csha="${csha#sha256:}"
+        sha_map["$cname"]="${csha:0:8}"
+    done < <($DOCKER inspect --format '{{.Name}}\t{{.Image}}' "${names[@]}" 2>/dev/null |
+        sed 's|^/||')
+
+    local i
+    for (( i=0; i<${#names[@]}; i++ )); do
+        local image="${images[$i]}"
+        # Extract tag: strip registry/repo prefix (everything up to last colon
+        # after the last slash) to avoid confusing registry ports with tags.
+        local repo_tag="${image##*/}"
+        local tag="${repo_tag##*:}"
+        [ "$tag" = "$repo_tag" ] && tag=""
+        local img_sha="${sha_map[${names[$i]}]:-}"
+        local img_desc
+        if [ -n "$tag" ] && [ -n "$img_sha" ]; then
+            img_desc="${tag} (${img_sha})"
+        elif [ -n "$img_sha" ]; then
+            img_desc="${img_sha}"
+        else
+            img_desc="${image}"
+        fi
+        printf "$fmt" "${names[$i]}" "${statuses[$i]}" "$img_desc" "${projects[$i]}"
+    done
 }
 
 cmd_shell() {
