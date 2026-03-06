@@ -340,19 +340,23 @@ test_docker_not_running_error() {
 test_podman_fallback() {
     # When docker is absent but podman exists, cage.sh should use podman.
     mock_reset
-    # Hide the mock docker and create a mock podman instead.
-    mv "$MOCK_DIR/docker" "$MOCK_DIR/docker.bak"
-    cp "$MOCK_DIR/docker.bak" "$MOCK_DIR/podman"
-    chmod +x "$MOCK_DIR/podman"
+    # Create a separate bin dir containing only podman (no docker).
+    local podman_dir="$MOCK_DIR/podman-only"
+    mkdir -p "$podman_dir"
+    cp "$MOCK_DIR/docker" "$podman_dir/podman"
+    chmod +x "$podman_dir/podman"
+    # Symlink essential tools so cage.sh can run (basename, shasum, etc).
+    for cmd in bash printf basename shasum cut grep head tail cat sed xargs; do
+        local cmd_path
+        cmd_path="$(command -v "$cmd" 2>/dev/null)" || true
+        [ -n "$cmd_path" ] && ln -sf "$cmd_path" "$podman_dir/$cmd"
+    done
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
-    # Restrict PATH so the real docker (if installed) is not found —
-    # only the mock dir and essential system dirs remain.
-    local out; out="$(PATH="$MOCK_DIR:/usr/bin:/bin" run_cage status 2>&1)"
+    # Use only podman_dir — docker is absent, so cage.sh falls back to podman.
+    local out; out="$(PATH="$podman_dir" run_cage status 2>&1)"
     assert_contains "$out" "State:" "podman fallback works"
-    # Restore mock docker.
-    mv "$MOCK_DIR/docker.bak" "$MOCK_DIR/docker"
-    rm -f "$MOCK_DIR/podman"
+    rm -rf "$podman_dir"
 }
 
 # ================================================================
