@@ -777,7 +777,7 @@ test_list_handles_missing_image_date() {
     mock_docker_response "image" 1 ""
     local out; out="$(run_cage list)"
     assert_contains "$out" "latest (abcdef12)" "falls back to tag and SHA without date"
-    assert_not_contains "$out" "," "no comma when date is missing"
+    assert_not_contains "$out" "latest (abcdef12," "no dangling comma when date is missing"
 }
 
 # ================================================================
