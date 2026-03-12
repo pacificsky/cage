@@ -308,13 +308,13 @@ test_help_long_flag() {
     local out; out="$(run_cage --help)";  assert_contains "$out" "Usage:"
 }
 test_version_V() {
-    local out; out="$(run_cage -V)";      assert_contains "$out" "cage 0.6.0"
+    local out; out="$(run_cage -V)";      assert_contains "$out" "cage 0.7.0"
 }
 test_version_long() {
-    local out; out="$(run_cage --version)"; assert_contains "$out" "cage 0.6.0"
+    local out; out="$(run_cage --version)"; assert_contains "$out" "cage 0.7.0"
 }
 test_version_command() {
-    local out; out="$(run_cage version)"; assert_contains "$out" "cage 0.6.0"
+    local out; out="$(run_cage version)"; assert_contains "$out" "cage 0.7.0"
 }
 
 test_unknown_command_fails() {
