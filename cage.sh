@@ -290,7 +290,7 @@ cmd_list() {
     local label_tpl='{{.Label "cage.project"}}'
     [ "$DOCKER" = "podman" ] && label_tpl='{{index .Labels "cage.project"}}'
 
-    local fmt="%-35s %-25s %-20s %s\n"
+    local fmt="%-35s %-25s %-32s %s\n"
     printf "$fmt" "NAMES" "STATUS" "IMAGE" "PROJECT"
 
     # Collect container rows from docker ps.
@@ -307,13 +307,33 @@ cmd_list() {
 
     # Batch-fetch image SHAs for all containers in a single inspect call.
     # Use parallel arrays instead of associative array for Bash 3.x compat.
-    local -a sha_keys=() sha_vals=()
+    local -a sha_keys=() sha_vals=() sha_full=()
     while IFS='|' read -r cname csha; do
-        csha="${csha#sha256:}"
         sha_keys+=("$cname")
+        sha_full+=("$csha")
+        csha="${csha#sha256:}"
         sha_vals+=("${csha:0:8}")
     done < <($DOCKER inspect --format '{{.Name}}|{{.Image}}' "${names[@]}" 2>/dev/null |
         sed 's|^/||')
+
+    # Batch-fetch image creation dates. Deduplicate full image IDs first.
+    local -a date_keys=() date_vals=()
+    local -a unique_ids=()
+    local k already
+    for k in "${sha_full[@]}"; do
+        already=""
+        local u
+        for u in "${unique_ids[@]+"${unique_ids[@]}"}"; do
+            [ "$u" = "$k" ] && { already=1; break; }
+        done
+        [ -z "$already" ] && unique_ids+=("$k")
+    done
+    if [ ${#unique_ids[@]} -gt 0 ]; then
+        while IFS='|' read -r did dcreated; do
+            date_keys+=("$did")
+            date_vals+=("${dcreated:0:10}")
+        done < <($DOCKER image inspect --format '{{.Id}}|{{.Created}}' "${unique_ids[@]}" 2>/dev/null)
+    fi
 
     local i
     for (( i=0; i<${#names[@]}; i++ )); do
@@ -323,17 +343,33 @@ cmd_list() {
         local repo_tag="${image##*/}"
         local tag="${repo_tag##*:}"
         [ "$tag" = "$repo_tag" ] && tag=""
-        # Look up SHA from parallel arrays.
-        local img_sha="" j
+        # Look up SHA and full image ID from parallel arrays.
+        local img_sha="" img_full="" j
         for (( j=0; j<${#sha_keys[@]}; j++ )); do
             if [ "${sha_keys[$j]}" = "${names[$i]}" ]; then
                 img_sha="${sha_vals[$j]}"
+                img_full="${sha_full[$j]}"
                 break
             fi
         done
+        # Look up creation date from image inspect results.
+        local img_date=""
+        if [ -n "$img_full" ]; then
+            local d
+            for (( d=0; d<${#date_keys[@]}; d++ )); do
+                if [ "${date_keys[$d]}" = "$img_full" ]; then
+                    img_date="${date_vals[$d]}"
+                    break
+                fi
+            done
+        fi
         local img_desc
-        if [ -n "$tag" ] && [ -n "$img_sha" ]; then
+        if [ -n "$tag" ] && [ -n "$img_sha" ] && [ -n "$img_date" ]; then
+            img_desc="${tag} (${img_sha}, ${img_date})"
+        elif [ -n "$tag" ] && [ -n "$img_sha" ]; then
             img_desc="${tag} (${img_sha})"
+        elif [ -n "$img_sha" ] && [ -n "$img_date" ]; then
+            img_desc="${img_sha} (${img_date})"
         elif [ -n "$img_sha" ]; then
             img_desc="${img_sha}"
         else

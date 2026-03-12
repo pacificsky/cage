@@ -707,9 +707,11 @@ test_list_filters_by_label() {
     mock_docker_response "info" 0 ""
     mock_docker_response "ps" 0 "$(printf 'cage-app-12345678\tUp 2 hours\t/home/user/app\tghcr.io/pacificsky/devcontainer-lite:latest')"
     mock_docker_response "inspect" 0 "/cage-app-12345678|sha256:abcdef1234567890"
+    mock_docker_response "image" 0 "sha256:abcdef1234567890|2025-03-01T12:00:00Z"
     local out; out="$(run_cage list)"
     assert_contains "$out" "cage-app" "lists cage containers"
     assert_contains "$(mock_calls)" "label=cage.project" "filters by cage.project label"
+    assert_contains "$out" "2025-03-01" "shows image creation date"
 }
 
 test_list_shows_image_column_header() {
@@ -726,9 +728,11 @@ test_list_shows_image_tag_and_sha() {
     mock_docker_response "info" 0 ""
     mock_docker_response "ps" 0 "$(printf 'cage-app-12345678\tUp 2 hours\t/home/user/app\tghcr.io/pacificsky/devcontainer-lite:20250301')"
     mock_docker_response "inspect" 0 "/cage-app-12345678|sha256:abcdef1234567890faded"
+    mock_docker_response "image" 0 "sha256:abcdef1234567890faded|2025-03-01T12:00:00Z"
     local out; out="$(run_cage list)"
     assert_contains "$out" "20250301" "shows image tag"
     assert_contains "$out" "abcdef12" "shows short image SHA"
+    assert_contains "$out" "2025-03-01" "shows image creation date"
 }
 
 test_list_shows_image_sha_only_when_no_tag() {
@@ -736,9 +740,11 @@ test_list_shows_image_sha_only_when_no_tag() {
     mock_docker_response "info" 0 ""
     mock_docker_response "ps" 0 "$(printf 'cage-app-12345678\tUp 2 hours\t/home/user/app\tubuntu')"
     mock_docker_response "inspect" 0 "/cage-app-12345678|sha256:abcdef1234567890faded"
+    mock_docker_response "image" 0 "sha256:abcdef1234567890faded|2025-06-15T08:30:00Z"
     local out; out="$(run_cage list)"
     assert_contains "$out" "abcdef12" "shows short SHA when no tag"
     assert_not_contains "$out" "ubuntu" "image name not shown as tag"
+    assert_contains "$out" "2025-06-15" "shows date when no tag"
 }
 
 test_list_handles_registry_port_in_image() {
@@ -746,9 +752,32 @@ test_list_handles_registry_port_in_image() {
     mock_docker_response "info" 0 ""
     mock_docker_response "ps" 0 "$(printf 'cage-app-12345678\tUp 2 hours\t/home/user/app\tregistry.example.com:5000/myapp:v2')"
     mock_docker_response "inspect" 0 "/cage-app-12345678|sha256:abcdef1234567890faded"
+    mock_docker_response "image" 0 "sha256:abcdef1234567890faded|2025-03-01T12:00:00Z"
     local out; out="$(run_cage list)"
     assert_contains "$out" "v2" "shows tag from image with registry port"
     assert_not_contains "$out" "5000" "registry port not treated as tag"
+    assert_contains "$out" "2025-03-01" "shows image creation date"
+}
+
+test_list_shows_date_when_available() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "ps" 0 "$(printf 'cage-app-12345678\tUp 2 hours\t/home/user/app\tghcr.io/pacificsky/devcontainer-lite:latest')"
+    mock_docker_response "inspect" 0 "/cage-app-12345678|sha256:abcdef1234567890faded"
+    mock_docker_response "image" 0 "sha256:abcdef1234567890faded|2025-03-01T12:00:00Z"
+    local out; out="$(run_cage list)"
+    assert_contains "$out" "latest (abcdef12, 2025-03-01)" "shows tag, SHA, and date combined"
+}
+
+test_list_handles_missing_image_date() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "ps" 0 "$(printf 'cage-app-12345678\tUp 2 hours\t/home/user/app\tghcr.io/pacificsky/devcontainer-lite:latest')"
+    mock_docker_response "inspect" 0 "/cage-app-12345678|sha256:abcdef1234567890faded"
+    mock_docker_response "image" 1 ""
+    local out; out="$(run_cage list)"
+    assert_contains "$out" "latest (abcdef12)" "falls back to tag and SHA without date"
+    assert_not_contains "$out" "latest (abcdef12," "no dangling comma when date is missing"
 }
 
 # ================================================================
@@ -1303,6 +1332,8 @@ main() {
     run_test test_list_shows_image_tag_and_sha
     run_test test_list_shows_image_sha_only_when_no_tag
     run_test test_list_handles_registry_port_in_image
+    run_test test_list_shows_date_when_available
+    run_test test_list_handles_missing_image_date
 
     echo ""
     echo "--- cmd_obliterate (global) ---"
