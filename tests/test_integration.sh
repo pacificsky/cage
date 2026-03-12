@@ -332,7 +332,16 @@ test_list_shows_container() {
 
     local out
     out="$(run_cage_in "$pdir" list)"
-    assert_contains "$out" "$name" "container appears in list"
+
+    # Validate all four columns of the list output.
+    # Column 1: NAMES — the deterministic container name.
+    assert_contains "$out" "$name" "NAMES column: container name"
+    # Column 2: STATUS — container should be running after start.
+    assert_contains "$out" "Up" "STATUS column: container is running"
+    # Column 3: IMAGE — should show the tag from CAGE_IMAGE (24.04) and a short SHA.
+    assert_contains "$out" "24.04" "IMAGE column: image tag"
+    # Column 4: PROJECT — the project directory path.
+    assert_contains "$out" "$pdir" "PROJECT column: project directory"
 
     cleanup_container "$name"
 }
