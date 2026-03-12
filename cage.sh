@@ -308,11 +308,11 @@ cmd_list() {
     # Batch-fetch image SHAs for all containers in a single inspect call.
     # Use parallel arrays instead of associative array for Bash 3.x compat.
     local -a sha_keys=() sha_vals=()
-    while IFS=$'\t' read -r cname csha; do
+    while IFS='|' read -r cname csha; do
         csha="${csha#sha256:}"
         sha_keys+=("$cname")
         sha_vals+=("${csha:0:8}")
-    done < <($DOCKER inspect --format '{{.Name}}\t{{.Image}}' "${names[@]}" 2>/dev/null |
+    done < <($DOCKER inspect --format '{{.Name}}|{{.Image}}' "${names[@]}" 2>/dev/null |
         sed 's|^/||')
 
     local i
