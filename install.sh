@@ -95,7 +95,7 @@ do_install() {
     local url="https://raw.githubusercontent.com/$REPO/$tag/cage.sh"
     local tmpfile
     tmpfile="$(mktemp)"
-    trap 'rm -f "$tmpfile"' EXIT
+    trap 'rm -f "${tmpfile:-}"' EXIT
 
     info "Downloading cage $version..."
     download "$url" > "$tmpfile" || die "Failed to download cage $version (tag: $tag)"
