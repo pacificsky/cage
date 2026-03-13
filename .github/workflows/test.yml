@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - 'cage.sh'
+      - 'install.sh'
       - 'tests/**'
       - '.github/workflows/test.yml'
 
@@ -22,6 +23,7 @@ jobs:
           filters: |
             should_test:
               - 'cage.sh'
+              - 'install.sh'
               - 'tests/**'
               - '.github/workflows/test.yml'
 
@@ -34,6 +36,9 @@ jobs:
 
       - name: Run tests
         run: bash tests/test_cage.sh
+
+      - name: Run install script tests
+        run: bash tests/test_install.sh
 
   test-gate:
     needs: test

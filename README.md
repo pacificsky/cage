@@ -11,6 +11,18 @@ brew tap pacificsky/tap
 brew install cage
 ```
 
+### Without Homebrew
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pacificsky/cage/main/install.sh | sh
+```
+
+This installs `cage` to `~/.local/bin`. To update, run the same command again. To uninstall:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pacificsky/cage/main/install.sh | sh -s -- --uninstall
+```
+
 ## Quick Start
 
 ```bash
