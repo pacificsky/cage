@@ -91,6 +91,7 @@ MOCK_DIR=""
 FAKE_HOME=""
 FAKE_INSTALL_DIR=""
 ORIGINAL_PATH=""
+ORIGINAL_HOME=""
 
 setup_mock() {
     MOCK_DIR="$(mktemp -d)"
@@ -105,6 +106,7 @@ VERSION="0.9.0"
 echo "I am cage"'
 
     ORIGINAL_PATH="$PATH"
+    ORIGINAL_HOME="$HOME"
     export HOME="$FAKE_HOME"
     export PATH="$MOCK_DIR/bin:$FAKE_INSTALL_DIR:$PATH"
     export CAGE_INSTALL_DIR="$FAKE_INSTALL_DIR"
@@ -171,6 +173,7 @@ teardown_mock() {
     unset CAGE_VERSION 2>/dev/null || true
     unset CAGE_INSTALL_DIR 2>/dev/null || true
     [ -n "${ORIGINAL_PATH:-}" ] && export PATH="$ORIGINAL_PATH"
+    [ -n "${ORIGINAL_HOME:-}" ] && export HOME="$ORIGINAL_HOME"
     [ -n "$MOCK_DIR" ] && rm -rf "$MOCK_DIR"
 }
 
