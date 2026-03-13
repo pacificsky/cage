@@ -1274,13 +1274,13 @@ test_start_project_env_file() {
     mock_docker_response "create" 0 ""
     mock_docker_response "start" 0 ""
 
-    local project_dir; project_dir="$(pwd)"
+    local project_dir; project_dir="$(mktemp -d)"
     echo "BAZ=qux" > "$project_dir/.cage.env"
 
-    run_cage start 2>&1 >/dev/null || true
+    (cd "$project_dir" && run_cage start 2>&1 >/dev/null || true)
     assert_contains "$(mock_calls)" "--env-file $project_dir/.cage.env" "project env file in docker create"
 
-    rm -f "$project_dir/.cage.env"
+    rm -rf "$project_dir"
 }
 
 test_start_both_env_files() {
@@ -1293,15 +1293,16 @@ test_start_both_env_files() {
 
     mkdir -p "$HOME/.config/cage"
     echo "GLOBAL=yes" > "$HOME/.config/cage/env"
-    local project_dir; project_dir="$(pwd)"
+    local project_dir; project_dir="$(mktemp -d)"
     echo "LOCAL=yes" > "$project_dir/.cage.env"
 
-    run_cage start 2>&1 >/dev/null || true
+    (cd "$project_dir" && run_cage start 2>&1 >/dev/null || true)
     local calls; calls="$(mock_calls)"
     assert_contains "$calls" "--env-file $HOME/.config/cage/env" "global env file present"
     assert_contains "$calls" "--env-file $project_dir/.cage.env" "project env file present"
 
-    rm -f "$HOME/.config/cage/env" "$project_dir/.cage.env"
+    rm -f "$HOME/.config/cage/env"
+    rm -rf "$project_dir"
 }
 
 test_start_no_env_files() {
@@ -1313,11 +1314,12 @@ test_start_no_env_files() {
     mock_docker_response "start" 0 ""
 
     rm -f "$HOME/.config/cage/env"
-    local project_dir; project_dir="$(pwd)"
-    rm -f "$project_dir/.cage.env"
+    local project_dir; project_dir="$(mktemp -d)"
 
-    run_cage start 2>&1 >/dev/null || true
+    (cd "$project_dir" && run_cage start 2>&1 >/dev/null || true)
     assert_not_contains "$(mock_calls)" "--env-file" "no env-file flags when files absent"
+
+    rm -rf "$project_dir"
 }
 
 test_reattach_does_not_use_env_files() {
@@ -1329,13 +1331,14 @@ test_reattach_does_not_use_env_files() {
 
     mkdir -p "$HOME/.config/cage"
     echo "FOO=bar" > "$HOME/.config/cage/env"
-    local project_dir; project_dir="$(pwd)"
+    local project_dir; project_dir="$(mktemp -d)"
     echo "BAZ=qux" > "$project_dir/.cage.env"
 
-    run_cage start 2>&1 >/dev/null || true
+    (cd "$project_dir" && run_cage start 2>&1 >/dev/null || true)
     assert_not_contains "$(mock_calls)" "--env-file" "no env-file on reattach"
 
-    rm -f "$HOME/.config/cage/env" "$project_dir/.cage.env"
+    rm -f "$HOME/.config/cage/env"
+    rm -rf "$project_dir"
 }
 
 # ================================================================
