@@ -308,13 +308,13 @@ test_help_long_flag() {
     local out; out="$(run_cage --help)";  assert_contains "$out" "Usage:"
 }
 test_version_V() {
-    local out; out="$(run_cage -V)";      assert_contains "$out" "cage 0.7.0"
+    local out; out="$(run_cage -V)";      assert_contains "$out" "cage 0.8.0"
 }
 test_version_long() {
-    local out; out="$(run_cage --version)"; assert_contains "$out" "cage 0.7.0"
+    local out; out="$(run_cage --version)"; assert_contains "$out" "cage 0.8.0"
 }
 test_version_command() {
-    local out; out="$(run_cage version)"; assert_contains "$out" "cage 0.7.0"
+    local out; out="$(run_cage version)"; assert_contains "$out" "cage 0.8.0"
 }
 
 test_unknown_command_fails() {
@@ -540,7 +540,7 @@ test_start_passes_port_to_docker_create() {
     mock_docker_response "pull" 0 ""
     mock_docker_response "create" 0 ""
     mock_docker_response "start" 0 ""
-    run_cage start -p 3000:3000 2>&1 >/dev/null || true
+    run_cage start -p 3000:3000 >/dev/null 2>&1 || true
     assert_contains "$(mock_calls)" "-p 3000:3000" "port flag in docker create"
 }
 
@@ -551,7 +551,7 @@ test_start_multiple_ports() {
     mock_docker_response "pull" 0 ""
     mock_docker_response "create" 0 ""
     mock_docker_response "start" 0 ""
-    run_cage start -p 3000:3000 -p 8080:8080 2>&1 >/dev/null || true
+    run_cage start -p 3000:3000 -p 8080:8080 >/dev/null 2>&1 || true
     local calls; calls="$(mock_calls)"
     assert_contains "$calls" "-p 3000:3000" "first port"
     assert_contains "$calls" "-p 8080:8080" "second port"
@@ -564,7 +564,7 @@ test_start_volume_flag() {
     mock_docker_response "pull" 0 ""
     mock_docker_response "create" 0 ""
     mock_docker_response "start" 0 ""
-    run_cage start -v /data:/data 2>&1 >/dev/null || true
+    run_cage start -v /data:/data >/dev/null 2>&1 || true
     assert_contains "$(mock_calls)" "-v /data:/data" "volume flag in docker create"
 }
 
@@ -575,7 +575,7 @@ test_start_mixed_port_and_volume() {
     mock_docker_response "pull" 0 ""
     mock_docker_response "create" 0 ""
     mock_docker_response "start" 0 ""
-    run_cage start -p 3000:3000 -v /data:/data -p 8080:8080 2>&1 >/dev/null || true
+    run_cage start -p 3000:3000 -v /data:/data -p 8080:8080 >/dev/null 2>&1 || true
     local calls; calls="$(mock_calls)"
     assert_contains "$calls" "-p 3000:3000" "port flag"
     assert_contains "$calls" "-v /data:/data" "volume flag"
@@ -628,7 +628,7 @@ test_start_docker_create_mounts() {
     mock_docker_response "pull" 0 ""
     mock_docker_response "create" 0 ""
     mock_docker_response "start" 0 ""
-    run_cage start 2>&1 >/dev/null || true
+    run_cage start >/dev/null 2>&1 || true
     local calls; calls="$(mock_calls)"
     local pdir; pdir="$(pwd)"
     assert_contains "$calls" "-v ${pdir}:${pdir}" "project dir mounted"
@@ -646,7 +646,7 @@ test_start_container_hostname() {
     mock_docker_response "pull" 0 ""
     mock_docker_response "create" 0 ""
     mock_docker_response "start" 0 ""
-    run_cage start 2>&1 >/dev/null || true
+    run_cage start >/dev/null 2>&1 || true
     local calls; calls="$(mock_calls)"
     local expected_name; expected_name="$(expected_container_name)"
     assert_contains "$calls" "--hostname ${expected_name}" "hostname matches container name"
@@ -660,7 +660,7 @@ test_start_cage_image_override() {
     mock_docker_response "pull" 0 ""
     mock_docker_response "create" 0 ""
     mock_docker_response "start" 0 ""
-    CAGE_IMAGE="custom/img:v2" run_cage start 2>&1 >/dev/null || true
+    CAGE_IMAGE="custom/img:v2" run_cage start >/dev/null 2>&1 || true
     assert_contains "$(mock_calls)" "custom/img:v2" "custom image in docker create"
 }
 
@@ -1016,7 +1016,7 @@ s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 s.bind(sys.argv[1])
 " "$sock" 2>/dev/null || socat UNIX-LISTEN:"$sock",fork /dev/null &
 
-    SSH_AUTH_SOCK="$sock" run_cage start 2>&1 >/dev/null || true
+    SSH_AUTH_SOCK="$sock" run_cage start >/dev/null 2>&1 || true
     local calls; calls="$(mock_calls)"
     assert_contains "$calls" "-v ${sock}:/tmp/ssh-agent.sock" "socket bind-mounted"
     assert_contains "$calls" "SSH_AUTH_SOCK=/tmp/ssh-agent.sock" "SSH_AUTH_SOCK set"
@@ -1041,7 +1041,7 @@ UNAME_SCRIPT
     chmod +x "$MOCK_DIR/uname"
 
     unset SSH_AUTH_SOCK
-    run_cage start 2>&1 >/dev/null || true
+    run_cage start >/dev/null 2>&1 || true
     local calls; calls="$(mock_calls)"
     assert_not_contains "$calls" "SSH_AUTH_SOCK" "no SSH env when agent absent"
     assert_not_contains "$calls" "ssh-agent.sock" "no ssh socket mount"
@@ -1101,7 +1101,7 @@ test_start_ssh_macos_uses_vm_socket() {
     mock_docker_response "start" 0 ""
     setup_colima_env true
 
-    SSH_AUTH_SOCK="/tmp/not-a-real-socket" run_cage start 2>&1 >/dev/null || true
+    SSH_AUTH_SOCK="/tmp/not-a-real-socket" run_cage start >/dev/null 2>&1 || true
     local calls; calls="$(mock_calls)"
     assert_contains "$calls" "/run/host-services/ssh-auth.sock:/run/host-services/ssh-auth.sock" "VM socket mounted"
     assert_contains "$calls" "SSH_AUTH_SOCK=/run/host-services/ssh-auth.sock" "SSH_AUTH_SOCK points to VM socket"
@@ -1222,7 +1222,7 @@ test_reattach_does_not_seed() {
     mkdir -p "$HOME/.config/cage/home/.claude"
     echo '{}' > "$HOME/.config/cage/home/.claude/settings.json"
 
-    run_cage start 2>&1 >/dev/null || true
+    run_cage start >/dev/null 2>&1 || true
     assert_eq "0" "$(mock_call_count cp)" "docker cp NOT called on reattach"
     assert_eq "1" "$(mock_call_count attach)" "docker attach called"
 
@@ -1239,7 +1239,7 @@ test_restart_stopped_does_not_seed() {
     mkdir -p "$HOME/.config/cage/home/.claude"
     echo '{}' > "$HOME/.config/cage/home/.claude/settings.json"
 
-    run_cage start 2>&1 >/dev/null || true
+    run_cage start >/dev/null 2>&1 || true
     assert_eq "0" "$(mock_call_count cp)" "docker cp NOT called on restart"
 
     rm -rf "$HOME/.config/cage/home"
@@ -1260,7 +1260,7 @@ test_start_global_env_file() {
     mkdir -p "$HOME/.config/cage"
     echo "FOO=bar" > "$HOME/.config/cage/env"
 
-    run_cage start 2>&1 >/dev/null || true
+    run_cage start >/dev/null 2>&1 || true
     assert_contains "$(mock_calls)" "--env-file $HOME/.config/cage/env" "global env file in docker create"
 
     rm -f "$HOME/.config/cage/env"
@@ -1274,13 +1274,13 @@ test_start_project_env_file() {
     mock_docker_response "create" 0 ""
     mock_docker_response "start" 0 ""
 
-    local project_dir; project_dir="$(pwd)"
+    local project_dir; project_dir="$(mktemp -d)"
     echo "BAZ=qux" > "$project_dir/.cage.env"
 
-    run_cage start 2>&1 >/dev/null || true
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
     assert_contains "$(mock_calls)" "--env-file $project_dir/.cage.env" "project env file in docker create"
 
-    rm -f "$project_dir/.cage.env"
+    rm -rf "$project_dir"
 }
 
 test_start_both_env_files() {
@@ -1293,15 +1293,16 @@ test_start_both_env_files() {
 
     mkdir -p "$HOME/.config/cage"
     echo "GLOBAL=yes" > "$HOME/.config/cage/env"
-    local project_dir; project_dir="$(pwd)"
+    local project_dir; project_dir="$(mktemp -d)"
     echo "LOCAL=yes" > "$project_dir/.cage.env"
 
-    run_cage start 2>&1 >/dev/null || true
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
     local calls; calls="$(mock_calls)"
     assert_contains "$calls" "--env-file $HOME/.config/cage/env" "global env file present"
     assert_contains "$calls" "--env-file $project_dir/.cage.env" "project env file present"
 
-    rm -f "$HOME/.config/cage/env" "$project_dir/.cage.env"
+    rm -f "$HOME/.config/cage/env"
+    rm -rf "$project_dir"
 }
 
 test_start_no_env_files() {
@@ -1313,11 +1314,12 @@ test_start_no_env_files() {
     mock_docker_response "start" 0 ""
 
     rm -f "$HOME/.config/cage/env"
-    local project_dir; project_dir="$(pwd)"
-    rm -f "$project_dir/.cage.env"
+    local project_dir; project_dir="$(mktemp -d)"
 
-    run_cage start 2>&1 >/dev/null || true
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
     assert_not_contains "$(mock_calls)" "--env-file" "no env-file flags when files absent"
+
+    rm -rf "$project_dir"
 }
 
 test_reattach_does_not_use_env_files() {
@@ -1329,13 +1331,14 @@ test_reattach_does_not_use_env_files() {
 
     mkdir -p "$HOME/.config/cage"
     echo "FOO=bar" > "$HOME/.config/cage/env"
-    local project_dir; project_dir="$(pwd)"
+    local project_dir; project_dir="$(mktemp -d)"
     echo "BAZ=qux" > "$project_dir/.cage.env"
 
-    run_cage start 2>&1 >/dev/null || true
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
     assert_not_contains "$(mock_calls)" "--env-file" "no env-file on reattach"
 
-    rm -f "$HOME/.config/cage/env" "$project_dir/.cage.env"
+    rm -f "$HOME/.config/cage/env"
+    rm -rf "$project_dir"
 }
 
 # ================================================================

@@ -28,13 +28,11 @@ jobs:
         run: |
           cat > Formula/cage.rb << 'FORMULA'
           class Cage < Formula
-            desc "Run coding agents safely in containers on macOS"
+            desc "Run coding agents safely in containers"
             homepage "https://github.com/pacificsky/cage"
             url "https://github.com/pacificsky/cage/archive/refs/tags/${{ steps.tag.outputs.version }}.tar.gz"
             sha256 "${{ steps.sha.outputs.sha256 }}"
             license "MIT"
-
-            depends_on :macos
 
             def install
               bin.install "cage.sh" => "cage"
