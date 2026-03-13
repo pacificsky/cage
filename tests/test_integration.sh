@@ -324,6 +324,60 @@ test_seed_no_clobber() {
     rm -rf "$HOME/.config/cage/home"
 }
 
+test_env_file_project() {
+    local pdir; pdir="$(make_project_dir)"
+    local name; name="$(container_name_for "$pdir")"
+
+    echo "TEST_CAGE_ENV=hello" > "$pdir/.cage.env"
+
+    start_cage_in "$pdir" start
+
+    $DOCKER start "$name" >/dev/null 2>&1 || true
+    local val
+    val="$($DOCKER exec "$name" printenv TEST_CAGE_ENV 2>/dev/null)" || true
+    assert_eq "hello" "$val" "project env var visible in container"
+
+    cleanup_container "$name"
+    rm -f "$pdir/.cage.env"
+}
+
+test_env_file_global() {
+    local pdir; pdir="$(make_project_dir)"
+    local name; name="$(container_name_for "$pdir")"
+
+    mkdir -p "$HOME/.config/cage"
+    echo "TEST_CAGE_GLOBAL=world" > "$HOME/.config/cage/env"
+
+    start_cage_in "$pdir" start
+
+    $DOCKER start "$name" >/dev/null 2>&1 || true
+    local val
+    val="$($DOCKER exec "$name" printenv TEST_CAGE_GLOBAL 2>/dev/null)" || true
+    assert_eq "world" "$val" "global env var visible in container"
+
+    cleanup_container "$name"
+    rm -f "$HOME/.config/cage/env"
+}
+
+test_env_file_override() {
+    local pdir; pdir="$(make_project_dir)"
+    local name; name="$(container_name_for "$pdir")"
+
+    mkdir -p "$HOME/.config/cage"
+    echo "OVERRIDE_ME=global" > "$HOME/.config/cage/env"
+    echo "OVERRIDE_ME=project" > "$pdir/.cage.env"
+
+    start_cage_in "$pdir" start
+
+    $DOCKER start "$name" >/dev/null 2>&1 || true
+    local val
+    val="$($DOCKER exec "$name" printenv OVERRIDE_ME 2>/dev/null)" || true
+    assert_eq "project" "$val" "project env overrides global"
+
+    cleanup_container "$name"
+    rm -f "$HOME/.config/cage/env" "$pdir/.cage.env"
+}
+
 test_list_shows_container() {
     local pdir; pdir="$(make_project_dir)"
     local name; name="$(container_name_for "$pdir")"
@@ -416,6 +470,12 @@ main() {
     echo "--- seed directory ---"
     run_test test_seed_directory
     run_test test_seed_no_clobber
+
+    echo ""
+    echo "--- env file ---"
+    run_test test_env_file_project
+    run_test test_env_file_global
+    run_test test_env_file_override
 
     echo ""
     echo "--- listing and cleanup ---"
