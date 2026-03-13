@@ -52,6 +52,15 @@ Deterministic: `cage-<dirname>-<8char-sha256-of-absolute-path>`. Example: `/User
 
 `~/.config/cage/home/` contents are copied into `/home/vscode/` on new container creation using `cp -n` (no-clobber). Existing files in the shared volume are never overwritten. The seed runs on every path that creates a new container: `start` (new), `restart`, and `upgrade`.
 
+### Environment Files
+
+cage injects environment variables from env files into containers at creation time using Docker's `--env-file` flag.
+
+- Global: `~/.config/cage/env` — applied to all cage containers
+- Per-project: `.cage.env` in the project directory — applied to that project's container only
+
+Both files use Docker env-file format: `KEY=VALUE` lines, `#` comments, blank lines. Per-project values override global for duplicate keys. Both are optional and silently skipped if absent. Only read at container creation; changes require `cage rm && cage start`.
+
 ### Testing
 
 - **Unit tests** (`tests/test_cage.sh`): Mock-based, no container runtime needed. Fast CI gate on every push.

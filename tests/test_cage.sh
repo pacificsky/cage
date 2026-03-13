@@ -1246,6 +1246,99 @@ test_restart_stopped_does_not_seed() {
 }
 
 # ================================================================
+# Tests: env file support
+# ================================================================
+
+test_start_global_env_file() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+
+    mkdir -p "$HOME/.config/cage"
+    echo "FOO=bar" > "$HOME/.config/cage/env"
+
+    run_cage start 2>&1 >/dev/null || true
+    assert_contains "$(mock_calls)" "--env-file $HOME/.config/cage/env" "global env file in docker create"
+
+    rm -f "$HOME/.config/cage/env"
+}
+
+test_start_project_env_file() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+
+    local project_dir; project_dir="$(pwd)"
+    echo "BAZ=qux" > "$project_dir/.cage.env"
+
+    run_cage start 2>&1 >/dev/null || true
+    assert_contains "$(mock_calls)" "--env-file $project_dir/.cage.env" "project env file in docker create"
+
+    rm -f "$project_dir/.cage.env"
+}
+
+test_start_both_env_files() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+
+    mkdir -p "$HOME/.config/cage"
+    echo "GLOBAL=yes" > "$HOME/.config/cage/env"
+    local project_dir; project_dir="$(pwd)"
+    echo "LOCAL=yes" > "$project_dir/.cage.env"
+
+    run_cage start 2>&1 >/dev/null || true
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "--env-file $HOME/.config/cage/env" "global env file present"
+    assert_contains "$calls" "--env-file $project_dir/.cage.env" "project env file present"
+
+    rm -f "$HOME/.config/cage/env" "$project_dir/.cage.env"
+}
+
+test_start_no_env_files() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+
+    rm -f "$HOME/.config/cage/env"
+    local project_dir; project_dir="$(pwd)"
+    rm -f "$project_dir/.cage.env"
+
+    run_cage start 2>&1 >/dev/null || true
+    assert_not_contains "$(mock_calls)" "--env-file" "no env-file flags when files absent"
+}
+
+test_reattach_does_not_use_env_files() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 0 "true"
+    mock_docker_response "image" 1 ""
+    mock_docker_response "attach" 0 ""
+
+    mkdir -p "$HOME/.config/cage"
+    echo "FOO=bar" > "$HOME/.config/cage/env"
+    local project_dir; project_dir="$(pwd)"
+    echo "BAZ=qux" > "$project_dir/.cage.env"
+
+    run_cage start 2>&1 >/dev/null || true
+    assert_not_contains "$(mock_calls)" "--env-file" "no env-file on reattach"
+
+    rm -f "$HOME/.config/cage/env" "$project_dir/.cage.env"
+}
+
+# ================================================================
 # Run all tests
 # ================================================================
 
@@ -1383,6 +1476,14 @@ main() {
     run_test test_start_skips_seed_when_seed_dir_empty
     run_test test_reattach_does_not_seed
     run_test test_restart_stopped_does_not_seed
+
+    echo ""
+    echo "--- env file support ---"
+    run_test test_start_global_env_file
+    run_test test_start_project_env_file
+    run_test test_start_both_env_files
+    run_test test_start_no_env_files
+    run_test test_reattach_does_not_use_env_files
 
     print_summary
 }

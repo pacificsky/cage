@@ -65,6 +65,27 @@ cage: A newer image is available. Run 'cage upgrade' to upgrade.
 
 Set `CAGE_IMAGE` to a local image name to skip remote pulls entirely.
 
+## Environment Files
+
+Inject environment variables into containers using env files:
+
+| File | Scope | Description |
+|------|-------|-------------|
+| `~/.config/cage/env` | Global | Applied to all cage containers |
+| `.cage.env` | Per-project | Applied to the current project's container |
+
+Both use Docker's env-file format (`KEY=VALUE`, `#` comments, blank lines). Per-project values override global values.
+
+```bash
+# ~/.config/cage/env
+ANTHROPIC_API_KEY=sk-ant-...
+
+# ~/src/my-project/.cage.env
+DATABASE_URL=postgres://localhost/mydb
+```
+
+Env files are read at container creation time. After changes: `cage rm && cage start`.
+
 ## Run from Source
 
 If you want to hack on cage itself instead of installing via Homebrew:

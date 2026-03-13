@@ -164,6 +164,14 @@ cmd_enter() {
                 )
             fi
 
+            # Inject environment variables from env files (if present).
+            # Global first; per-project overrides for duplicate keys.
+            local -a env_file_args=()
+            local global_env="$HOME/.config/cage/env"
+            local project_env="${project_dir}/.cage.env"
+            [[ -f "$global_env" ]] && env_file_args+=(--env-file "$global_env")
+            [[ -f "$project_env" ]] && env_file_args+=(--env-file "$project_env")
+
             $DOCKER create -it \
                 --name "$name" \
                 --hostname "$name" \
@@ -171,6 +179,7 @@ cmd_enter() {
                 ${port_flags[@]+"${port_flags[@]}"} \
                 "${mount_args[@]}" \
                 ${ssh_agent_args[@]+"${ssh_agent_args[@]}"} \
+                ${env_file_args[@]+"${env_file_args[@]}"} \
                 -e UV_PROJECT_ENVIRONMENT=.cage-venv \
                 -l "cage.project=${project_dir}" \
                 "$IMAGE" >/dev/null
@@ -460,7 +469,12 @@ Environment:
 Seed directory:
   ~/.config/cage/home/    Files copied (no-clobber) into /home/vscode/ on new containers
 
-Port (-p) and volume (-v) flags only apply when creating a new container.
+Environment files:
+  ~/.config/cage/env      Global env vars for all containers (optional)
+  .cage.env               Per-project env vars (optional, overrides global)
+                          Format: KEY=VALUE lines, # comments, blank lines
+
+Port (-p), volume (-v) flags and env files only apply when creating a new container.
 To change: cage.sh rm && cage.sh start -p 3000:3000 -v /data:/data
 EOF
 }
