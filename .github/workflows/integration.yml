@@ -2,10 +2,6 @@ name: Integration tests
 
 on:
   pull_request:
-    paths:
-      - 'cage.sh'
-      - 'tests/**'
-      - '.github/workflows/integration.yml'
   push:
     branches: [main]
     paths:
@@ -15,7 +11,24 @@ on:
   workflow_dispatch:
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      should_test: ${{ steps.filter.outputs.should_test }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            should_test:
+              - 'cage.sh'
+              - 'tests/**'
+              - '.github/workflows/integration.yml'
+
   integration:
+    needs: changes
+    if: needs.changes.outputs.should_test == 'true' || github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -43,3 +56,15 @@ jobs:
 
       - name: Run integration tests
         run: bash tests/test_integration.sh
+
+  integration-gate:
+    needs: integration
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          result="${{ needs.integration.result }}"
+          if [[ "$result" == "success" || "$result" == "skipped" ]]; then
+            exit 0
+          fi
+          exit 1
