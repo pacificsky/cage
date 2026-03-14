@@ -1,6 +1,18 @@
-# cage
+<p align="center">
+  <img src="images/cage.jpeg" alt="cage" width="600">
+</p>
 
-Live the `--dangerously-skip-permissions` life
+<h1 align="center">cage</h1>
+
+<p align="center">
+  Run coding agents safely in isolated containers — live the <code>--dangerously-skip-permissions</code> life
+</p>
+
+<p align="center">
+  <a href="https://github.com/pacificsky/cage/actions/workflows/test.yml"><img src="https://github.com/pacificsky/cage/actions/workflows/test.yml/badge.svg" alt="Test cage.sh"></a>
+  <a href="https://github.com/pacificsky/cage/actions/workflows/integration.yml"><img src="https://github.com/pacificsky/cage/actions/workflows/integration.yml/badge.svg" alt="Integration tests"></a>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+</p>
 
 Cage runs coding agents in isolated Docker containers on macOS or Linux. Your project is mounted read-write at the same absolute path — error messages, file references, and tooling all just work.
 
