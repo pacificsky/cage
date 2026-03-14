@@ -2,45 +2,31 @@
 
 Live the `--dangerously-skip-permissions` life
 
-Cage lets you run coding agents safely without restrictions in isolated Docker containers on macOS or Linux.
+Cage runs coding agents in isolated Docker containers on macOS or Linux. Your project is mounted read-write at the same absolute path — error messages, file references, and tooling all just work.
 
-Requires Docker (Engine or Desktop) or [colima](https://github.com/abiosoft/colima) or [podman](https://podman.io/docs/installation) installed on your machine.
+Requires Docker (Engine or Desktop) or [colima](https://github.com/abiosoft/colima) or [podman](https://podman.io/docs/installation).
 
-## Install with Homebrew
+## Install
+
+### Homebrew (macOS and Linux)
 
 ```bash
-brew tap pacificsky/tap
-brew install cage
+brew install pacificsky/tap/cage
 ```
 
-### Update
-```bash
-brew update && brew upgrade cage
-```
-
-## Without Homebrew
-
-### Install
+### Without Homebrew
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/pacificsky/cage/main/install.sh | sh
 ```
 
-This installs `cage` to `~/.local/bin`.
-
-### Update
-```bash
-curl -fsSL https://raw.githubusercontent.com/pacificsky/cage/main/install.sh | sh
-```
-
-
-### Uninstall
+Installs to `~/.local/bin`. Run the same command to update. To uninstall:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/pacificsky/cage/main/install.sh | sh -s -- --uninstall
 ```
 
-## Usage - Quick Start
+## Quick Start
 
 ```bash
 cd ~/src/my-project
@@ -60,13 +46,37 @@ Running `cage start` again from the same directory re-attaches to the existing c
 | `cage restart` | Remove and recreate container (volumes preserved) |
 | `cage update` | Pull latest container image |
 | `cage upgrade` | Pull latest image and recreate container |
-| `cage rmconfig` | Stop all containers and remove shared home volume |
-| `cage obliterate` | Remove all cage containers and shared home volume |
 | `cage status` | Show container name, state, and port mappings |
 | `cage list` | List all cage containers across projects |
 | `cage shell` | Open an additional shell in a running container |
+| `cage rmconfig` | Stop all containers and remove shared home volume |
+| `cage obliterate` | Remove all cage containers and shared home volume |
 
-## What Gets Mounted
+## Examples
+
+```bash
+# Start a container with port forwarding
+cage start -p 3000:3000
+
+# Multiple ports
+cage start -p 3000:3000 -p 5432:5432
+
+# Open a second shell while an agent is running
+cage shell
+
+# Check what's running across all projects
+cage list
+
+# Update to the latest container image
+cage upgrade
+
+# Start fresh (removes container, keeps volumes)
+cage restart
+```
+
+## How It Works
+
+### Mounts
 
 | Host | Container | Purpose |
 |------|-----------|---------|
@@ -74,11 +84,13 @@ Running `cage start` again from the same directory re-attaches to the existing c
 | `cage-home` (Docker volume) | `/home/vscode` | Shared home dir across all cages |
 | SSH agent socket | `/run/host-services/ssh-auth.sock` | SSH agent forwarding |
 
-The shared home volume persists across all cage containers, across all projects. Claude credentials, git config, shell history, and tool state all live here — configure once, share everywhere.
+### Shared Home
 
-## Image Updates
+The `cage-home` volume is shared across all cage containers and projects. Claude credentials, git config, shell history, and tool state all live here — configure once, share everywhere.
 
-cage automatically pulls the latest image when creating a new container. When re-attaching to an existing container, it warns if a newer image is available:
+### Image Updates
+
+Cage automatically pulls the latest image when creating a new container. When re-attaching to an existing container, it warns if a newer image is available:
 
 ```
 cage: A newer image is available. Run 'cage upgrade' to upgrade.
@@ -86,7 +98,9 @@ cage: A newer image is available. Run 'cage upgrade' to upgrade.
 
 `cage update` pulls the latest image. `cage upgrade` pulls and recreates the container.
 
-## Environment Variables
+## Configuration
+
+### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -94,7 +108,7 @@ cage: A newer image is available. Run 'cage upgrade' to upgrade.
 
 Set `CAGE_IMAGE` to a local image name to skip remote pulls entirely.
 
-## Environment Files
+### Environment Files
 
 Inject environment variables into containers using env files:
 
@@ -115,9 +129,11 @@ DATABASE_URL=postgres://localhost/mydb
 
 Env files are read at container creation time. After changes: `cage rm && cage start`.
 
-## Run from Source
+### Seed Directory
 
-If you want to hack on cage itself instead of installing via Homebrew:
+`~/.config/cage/home/` contents are copied into `/home/vscode/` on new container creation (no-clobber — existing files are never overwritten). Use this to pre-populate dotfiles, shell config, or tool settings.
+
+## Run from Source
 
 ```bash
 git clone git@github.com:pacificsky/cage.git
