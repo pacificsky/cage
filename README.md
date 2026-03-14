@@ -1,34 +1,51 @@
 # cage
 
-Run coding agents safely without restrictions in isolated Docker containers on macOS.
+Live the `--dangerously-skip-permissions` life
 
-## Install
+Cage lets you run coding agents safely without restrictions in isolated Docker containers on macOS or Linux.
 
-Requires Docker (or [colima](https://github.com/abiosoft/colima)) running on your Mac.
+Requires Docker (Engine or Desktop) or [colima](https://github.com/abiosoft/colima) or [podman](https://podman.io/docs/installation) installed on your machine.
+
+## Install with Homebrew
 
 ```bash
 brew tap pacificsky/tap
 brew install cage
 ```
 
-### Without Homebrew
+### Update
+```bash
+brew update && brew upgrade cage
+```
+
+## Without Homebrew
+
+### Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/pacificsky/cage/main/install.sh | sh
 ```
 
-This installs `cage` to `~/.local/bin`. To update, run the same command again. To uninstall:
+This installs `cage` to `~/.local/bin`.
+
+### Update
+```bash
+curl -fsSL https://raw.githubusercontent.com/pacificsky/cage/main/install.sh | sh
+```
+
+
+### Uninstall
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/pacificsky/cage/main/install.sh | sh -s -- --uninstall
 ```
 
-## Quick Start
+## Usage - Quick Start
 
 ```bash
 cd ~/src/my-project
-cage start                # create container and enter it
-cage start -p 3000:3000   # with port forwarding
+cage start                # create project-specific container and enter it
+claude --dangerously-skip-permissions
 ```
 
 Running `cage start` again from the same directory re-attaches to the existing container.
@@ -57,7 +74,7 @@ Running `cage start` again from the same directory re-attaches to the existing c
 | `cage-home` (Docker volume) | `/home/vscode` | Shared home dir across all cages |
 | SSH agent socket | `/run/host-services/ssh-auth.sock` | SSH agent forwarding |
 
-The shared home volume persists across all containers. Claude credentials, git config, shell history, and tool state all live here — configure once, share everywhere.
+The shared home volume persists across all cage containers, across all projects. Claude credentials, git config, shell history, and tool state all live here — configure once, share everywhere.
 
 ## Image Updates
 
