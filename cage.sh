@@ -181,6 +181,8 @@ cmd_enter() {
                 ${ssh_agent_args[@]+"${ssh_agent_args[@]}"} \
                 ${env_file_args[@]+"${env_file_args[@]}"} \
                 -e UV_PROJECT_ENVIRONMENT=.cage-venv \
+                -e HOST_UID="$(id -u)" \
+                -e HOST_GID="$(id -g)" \
                 -l "cage.project=${project_dir}" \
                 "$IMAGE" >/dev/null
 
