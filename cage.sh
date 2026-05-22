@@ -19,6 +19,34 @@ fi
 die() { echo "error: $*" >&2; exit 1; }
 info() { echo "cage: $*" >&2; }
 
+cage_banner_enter() {
+    local name="$1"
+    local c="\033[1;36m" r="\033[0m"
+    local line="═══════════════════════════════════════════════════════════════"
+    printf '%b\n' "${c}${line}${r}" >&2
+    printf '%b\n' "${c}  ▶  ENTERING CAGE: ${name}${r}" >&2
+    printf '%b\n' "${c}  ▶  Type 'exit' or press Ctrl+D to return to host${r}" >&2
+    printf '%b\n' "${c}${line}${r}" >&2
+}
+
+cage_banner_exit() {
+    local name="$1"
+    local c="\033[1;33m" r="\033[0m"
+    local line="═══════════════════════════════════════════════════════════════"
+    printf '%b\n' "${c}${line}${r}" >&2
+    printf '%b\n' "${c}  ◀  EXITED CAGE: ${name} — back on host${r}" >&2
+    printf '%b\n' "${c}${line}${r}" >&2
+}
+
+drop_into_cage() {
+    local name="$1"; shift
+    cage_banner_enter "$name"
+    local rc=0
+    "$@" || rc=$?
+    cage_banner_exit "$name"
+    return $rc
+}
+
 container_name() {
     local abs_path="$1"
     local dirname
@@ -121,7 +149,7 @@ cmd_enter() {
                 info "A newer image is available. Run 'cage upgrade' to upgrade."
             fi
             info "Re-attaching to $name"
-            $DOCKER attach "$name"
+            drop_into_cage "$name" $DOCKER attach "$name"
             ;;
         stopped)
             if [ ${#port_flags[@]} -gt 0 ]; then
@@ -131,7 +159,7 @@ cmd_enter() {
                 info "A newer image is available. Run 'cage upgrade' to upgrade."
             fi
             info "Restarting $name"
-            $DOCKER start -ai "$name"
+            drop_into_cage "$name" $DOCKER start -ai "$name"
             ;;
         none)
             if [[ "$IMAGE" == */* ]]; then
@@ -187,9 +215,9 @@ cmd_enter() {
                 "$IMAGE" >/dev/null
 
             if seed_home "$name"; then
-                $DOCKER attach "$name"
+                drop_into_cage "$name" $DOCKER attach "$name"
             else
-                $DOCKER start -ai "$name"
+                drop_into_cage "$name" $DOCKER start -ai "$name"
             fi
             ;;
     esac
@@ -399,7 +427,7 @@ cmd_shell() {
 
     [ "$state" = "running" ] || die "Container $name is not running"
     info "Opening shell in $name"
-    $DOCKER exec -it "$name" zsh
+    drop_into_cage "$name" $DOCKER exec -it "$name" zsh
 }
 
 cmd_restart() {
