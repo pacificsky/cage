@@ -1322,6 +1322,54 @@ test_start_no_env_files() {
     rm -rf "$project_dir"
 }
 
+test_start_new_container_prints_enter_and_exit_banners() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    local expected_name; expected_name="$(expected_container_name)"
+    local out; out="$(run_cage start 2>&1)"
+    assert_contains "$out" "ENTERING CAGE" "enter banner shown"
+    assert_contains "$out" "$expected_name" "enter banner contains container name"
+    assert_contains "$out" "EXITED CAGE" "exit banner shown"
+}
+
+test_start_reattach_prints_enter_and_exit_banners() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 0 "true"
+    mock_docker_response "image" 1 ""
+    mock_docker_response "attach" 0 ""
+    local out; out="$(run_cage start 2>&1)"
+    assert_contains "$out" "ENTERING CAGE" "enter banner shown on reattach"
+    assert_contains "$out" "EXITED CAGE" "exit banner shown on reattach"
+}
+
+test_start_restart_stopped_prints_enter_and_exit_banners() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 0 "false"
+    mock_docker_response "image" 1 ""
+    mock_docker_response "start" 0 ""
+    local out; out="$(run_cage start 2>&1)"
+    assert_contains "$out" "ENTERING CAGE" "enter banner shown on restart-stopped"
+    assert_contains "$out" "EXITED CAGE" "exit banner shown on restart-stopped"
+}
+
+test_shell_prints_enter_and_exit_banners() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 0 "true"
+    mock_docker_response "exec" 0 ""
+    local expected_name; expected_name="$(expected_container_name)"
+    local out; out="$(run_cage shell 2>&1)"
+    assert_contains "$out" "ENTERING CAGE" "enter banner shown for shell"
+    assert_contains "$out" "$expected_name" "enter banner contains container name"
+    assert_contains "$out" "EXITED CAGE" "exit banner shown for shell"
+}
+
 test_start_passes_host_uid_gid() {
     mock_reset
     mock_docker_response "info" 0 ""
@@ -1514,6 +1562,10 @@ main() {
     run_test test_start_project_env_file
     run_test test_start_both_env_files
     run_test test_start_no_env_files
+    run_test test_start_new_container_prints_enter_and_exit_banners
+    run_test test_start_reattach_prints_enter_and_exit_banners
+    run_test test_start_restart_stopped_prints_enter_and_exit_banners
+    run_test test_shell_prints_enter_and_exit_banners
     run_test test_start_passes_host_uid_gid
     run_test test_reattach_does_not_pass_host_uid_gid
     run_test test_reattach_does_not_use_env_files
