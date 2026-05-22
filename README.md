@@ -94,7 +94,20 @@ cage restart
 |------|-----------|---------|
 | Project directory | Same absolute path | Code editing, matching error paths |
 | `cage-home` (Docker volume) | `/home/vscode` | Shared home dir across all cages |
-| SSH agent socket | `/run/host-services/ssh-auth.sock` | SSH agent forwarding |
+| SSH agent socket | `/run/host-services/ssh-auth.sock` (macOS) or `/tmp/ssh-agent.sock` (Linux) | SSH agent forwarding |
+
+On macOS, cage uses Docker Desktop's / Colima's SSH agent proxy. On Linux, it bind-mounts `$SSH_AUTH_SOCK` directly. `SSH_AUTH_SOCK` is set inside the container to match.
+
+### Injected Environment Variables
+
+These are set automatically on every container:
+
+| Variable | Value | Purpose |
+|----------|-------|---------|
+| `HOST_UID` | Host user's UID | Lets the container's entrypoint align `vscode` ownership with host files |
+| `HOST_GID` | Host user's GID | Same as above, for group ownership |
+| `SSH_AUTH_SOCK` | Path to forwarded socket | Points `ssh`/`git` at the host's SSH agent |
+| `UV_PROJECT_ENVIRONMENT` | `.cage-venv` | Keeps `uv`-managed venvs out of the host project's `.venv` |
 
 ### Shared Home
 
