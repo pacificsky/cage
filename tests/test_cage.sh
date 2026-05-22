@@ -1322,6 +1322,34 @@ test_start_no_env_files() {
     rm -rf "$project_dir"
 }
 
+test_start_passes_host_uid_gid() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    run_cage start >/dev/null 2>&1 || true
+    local calls; calls="$(mock_calls)"
+    local uid gid
+    uid="$(id -u)"
+    gid="$(id -g)"
+    assert_contains "$calls" "-e HOST_UID=${uid}" "HOST_UID env var in docker create"
+    assert_contains "$calls" "-e HOST_GID=${gid}" "HOST_GID env var in docker create"
+}
+
+test_reattach_does_not_pass_host_uid_gid() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 0 "true"
+    mock_docker_response "image" 1 ""
+    mock_docker_response "attach" 0 ""
+    run_cage start >/dev/null 2>&1 || true
+    local calls; calls="$(mock_calls)"
+    assert_not_contains "$calls" "HOST_UID" "no HOST_UID on reattach"
+    assert_not_contains "$calls" "HOST_GID" "no HOST_GID on reattach"
+}
+
 test_reattach_does_not_use_env_files() {
     mock_reset
     mock_docker_response "info" 0 ""
@@ -1486,6 +1514,8 @@ main() {
     run_test test_start_project_env_file
     run_test test_start_both_env_files
     run_test test_start_no_env_files
+    run_test test_start_passes_host_uid_gid
+    run_test test_reattach_does_not_pass_host_uid_gid
     run_test test_reattach_does_not_use_env_files
 
     print_summary
