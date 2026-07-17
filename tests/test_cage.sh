@@ -352,13 +352,18 @@ test_help_long_flag() {
     local out; out="$(run_cage --help)";  assert_contains "$out" "Usage:"
 }
 test_version_V() {
-    local out; out="$(run_cage -V)";      assert_contains "$out" "cage 0.8.0"
+    local out; out="$(run_cage -V)";      assert_contains "$out" "cage 0.9.0"
 }
 test_version_long() {
-    local out; out="$(run_cage --version)"; assert_contains "$out" "cage 0.8.0"
+    local out; out="$(run_cage --version)"; assert_contains "$out" "cage 0.9.0"
 }
 test_version_command() {
-    local out; out="$(run_cage version)"; assert_contains "$out" "cage 0.8.0"
+    local out; out="$(run_cage version)"; assert_contains "$out" "cage 0.9.0"
+}
+test_help_mentions_dstart() {
+    local out; out="$(run_cage help)"
+    assert_contains "$out" "dstart" "help documents dstart"
+    assert_contains "$out" "CAGE_SRC_ROOT" "help documents CAGE_SRC_ROOT"
 }
 
 test_unknown_command_fails() {
@@ -2113,6 +2118,7 @@ main() {
     run_test test_version_V
     run_test test_version_long
     run_test test_version_command
+    run_test test_help_mentions_dstart
     run_test test_unknown_command_fails
 
     echo ""

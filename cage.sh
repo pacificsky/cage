@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.8.0"
+VERSION="0.9.0"
 IMAGE="${CAGE_IMAGE:-ghcr.io/pacificsky/devcontainer-lite:latest}"
 HOME_VOL="cage-home"
 COLIMA_PROFILE="cage"
@@ -714,6 +714,12 @@ Usage: cage.sh <command> [options]
 Commands:
   start [-p hostPort:containerPort]... [-v hostPath:containerPath]...
             Create new container or re-attach to existing one for CWD
+  dstart [-p ...] [-v ...]
+            Like start, but docker-enabled: the agent gets a docker socket
+            and can run docker/compose for multi-service projects.
+            Linux: mounts the host socket (trusted — see warning banner).
+            macOS: uses a dedicated colima VM 'cage' that mounts only
+            CAGE_SRC_ROOT (contained — requires colima).
   stop      Stop container for CWD project
   rm        Stop and remove container for CWD project
   status    Show container name, state, and port mappings
@@ -727,7 +733,11 @@ Commands:
   help      Show this help
 
 Environment:
-  CAGE_IMAGE    Override container image (default: ghcr.io/pacificsky/devcontainer-lite:latest)
+  CAGE_IMAGE      Override container image (default: ghcr.io/pacificsky/devcontainer-lite:latest)
+  CAGE_SRC_ROOT   Source root mounted into the macOS cage VM (default: ~/src)
+  CAGE_VM_CPU     CPUs for the macOS cage VM (default: 4)
+  CAGE_VM_MEMORY  Memory in GiB for the macOS cage VM (default: 8)
+                  (all three also read from ~/.config/cage/env)
 
 Seed directory:
   ~/.config/cage/home/    Files copied (no-clobber) into /home/vscode/ on new containers

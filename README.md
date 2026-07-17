@@ -53,6 +53,7 @@ Running `cage start` again from the same directory re-attaches to the existing c
 | Command | Description |
 |---------|-------------|
 | `cage start` | Create or re-attach to container for current directory |
+| `cage dstart` | Like `start`, but docker-enabled (see [Docker inside your cage](#docker-inside-your-cage-multi-service-projects)) |
 | `cage stop` | Stop the container |
 | `cage rm` | Remove the container (volumes preserved) |
 | `cage restart` | Remove and recreate container (volumes preserved) |
@@ -157,6 +158,49 @@ Env files are read at container creation time. After changes: `cage rm && cage s
 ### Seed Directory
 
 `~/.config/cage/home/` contents are copied into `/home/vscode/` on new container creation (no-clobber — existing files are never overwritten). Use this to pre-populate dotfiles, shell config, or tool settings.
+
+## Docker inside your cage (multi-service projects)
+
+For full-stack projects where the services themselves run in containers, use
+`cage dstart` instead of `cage start`. The agent gets a docker socket and can
+run `docker compose up/down/build`, read service logs, and exec into services.
+
+    cage dstart
+
+What the agent's docker socket controls depends on your platform:
+
+- **Linux — trusted mode.** The host daemon's socket is mounted into the cage.
+  This is convenient but not contained: a socket is root-equivalent on the
+  machine. cage prints a warning banner so nobody is surprised.
+- **macOS — contained mode.** cage provisions a dedicated
+  [colima](https://github.com/abiosoft/colima) VM (profile `cage`) that mounts
+  only `CAGE_SRC_ROOT` (default `~/src`). The agent container and everything it
+  spawns live inside that VM. A socket escape is worth at most your project
+  checkouts — not your home directory. Requires colima
+  (`brew install colima`); Docker Desktop and OrbStack are not supported for
+  dstart because their sockets expose your file-shared home directory.
+
+Because cage mounts your project at the same absolute path everywhere (and
+colima preserves host paths in the VM), compose files with relative bind
+mounts (`./src:/app/src`) work unchanged.
+
+Notes:
+
+- Docker-enablement is a creation-time property. `cage status` shows it
+  (`Docker: host|colima|none`). To toggle it: `cage rm`, then
+  `cage dstart` (or `cage start`).
+- To reach a compose service from inside the cage, join its network:
+  `docker network connect <network> $(hostname)`. On macOS, published ports
+  are also forwarded to Mac localhost by colima.
+- `cage rm` removes the agent container but not the services it started —
+  use `docker compose down` first, or on macOS nuke everything with
+  `colima delete --profile cage`.
+- macOS: the cage VM's daemon has its own `cage-home` volume, so your first
+  dstart needs a one-time re-login to Claude (the seed directory applies as
+  usual).
+- VM sizing: `CAGE_VM_CPU` (default 4) and `CAGE_VM_MEMORY` (default 8 GiB),
+  set in the environment or `~/.config/cage/env`. Changing `CAGE_SRC_ROOT`
+  after the VM exists requires `colima delete --profile cage`.
 
 ## Run from Source
 
