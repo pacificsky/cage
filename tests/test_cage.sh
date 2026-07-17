@@ -390,7 +390,10 @@ test_podman_fallback() {
     cp "$MOCK_DIR/docker" "$podman_dir/podman"
     chmod +x "$podman_dir/podman"
     # Symlink essential tools so cage.sh can run (basename, shasum, etc).
-    for cmd in bash printf basename shasum cut grep head tail cat sed xargs; do
+    # dirname is required by the mock itself: without it MOCK_DIR resolution
+    # degrades to $PWD (bash cd "" is a no-op) and the mock's calls/env_calls
+    # files leak into the repository root.
+    for cmd in bash printf basename shasum cut grep head tail cat sed xargs dirname; do
         local cmd_path
         cmd_path="$(command -v "$cmd" 2>/dev/null)" || true
         [ -n "$cmd_path" ] && ln -sf "$cmd_path" "$podman_dir/$cmd"
