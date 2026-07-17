@@ -231,6 +231,7 @@ cmd_enter() {
     local name
     name="$(container_name "$project_dir")"
     route_to_container "$name"
+    ensure_docker
     local state
     state="$(container_state "$name")"
 
@@ -372,6 +373,7 @@ setup_colima_cage() {
             --ssh-agent \
             --cpu "$cpu" \
             --memory "$memory" \
+            --activate=false \
             || die "colima failed to start the cage VM. If the profile is corrupt, try: colima delete --profile $COLIMA_PROFILE"
     fi
 
@@ -415,6 +417,7 @@ cmd_stop() {
     local name
     name="$(container_name "$project_dir")"
     route_to_container "$name"
+    ensure_docker
     local state
     state="$(container_state "$name")"
 
@@ -437,6 +440,7 @@ cmd_rm() {
     local name
     name="$(container_name "$project_dir")"
     route_to_container "$name"
+    ensure_docker
     local state
     state="$(container_state "$name")"
 
@@ -520,6 +524,7 @@ cmd_status() {
     local name
     name="$(container_name "$project_dir")"
     route_to_container "$name"
+    ensure_docker
     local state
     state="$(container_state "$name")"
 
@@ -651,6 +656,7 @@ cmd_shell() {
     local name
     name="$(container_name "$project_dir")"
     route_to_container "$name"
+    ensure_docker
     local state
     state="$(container_state "$name")"
 
@@ -664,6 +670,7 @@ cmd_restart() {
     local name
     name="$(container_name "$project_dir")"
     route_to_container "$name"
+    ensure_docker
     local state
     state="$(container_state "$name")"
 
@@ -788,16 +795,15 @@ main() {
             if [ "$cmd" = "dstart" ]; then
                 cmd_dstart "$project_dir" ${port_flags[@]+"${port_flags[@]}"} ${vol_flags[@]+"${vol_flags[@]}"}
             else
-                ensure_docker
                 cmd_enter "$project_dir" ${port_flags[@]+"${port_flags[@]}"} ${vol_flags[@]+"${vol_flags[@]}"}
             fi
             ;;
-        stop)   ensure_docker; cmd_stop "$project_dir" ;;
-        rm)     ensure_docker; cmd_rm "$project_dir" ;;
-        status) ensure_docker; cmd_status "$project_dir" ;;
+        stop)   cmd_stop "$project_dir" ;;
+        rm)     cmd_rm "$project_dir" ;;
+        status) cmd_status "$project_dir" ;;
         list)   ensure_docker; cmd_list ;;
-        shell)  ensure_docker; cmd_shell "$project_dir" ;;
-        restart) ensure_docker; cmd_restart "$project_dir" ;;
+        shell)  cmd_shell "$project_dir" ;;
+        restart) cmd_restart "$project_dir" ;;
         obliterate) ensure_docker; cmd_obliterate ;;
         rmconfig) ensure_docker; cmd_rmconfig ;;
         update) ensure_docker; cmd_update ;;

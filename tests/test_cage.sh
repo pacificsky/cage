@@ -1919,6 +1919,7 @@ test_dstart_macos_provisions_vm_first_run() {
     mock_colima_response "ssh" 0 "998"        # socket gid inside the VM
     local out; out="$(run_dstart_macos)" || true
     assert_contains "$(colima_calls)" "start --profile cage --mount $HOME/src:w --ssh-agent --cpu 4 --memory 8" "provision command"
+    assert_contains "$(colima_calls)" "--activate=false" "does not hijack the user's docker context"
     assert_contains "$out" "cage VM" "explains the one-time provision"
     local calls; calls="$(mock_calls)"
     assert_contains "$calls" "cage.docker=colima" "colima mode label"
