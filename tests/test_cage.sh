@@ -1518,6 +1518,39 @@ test_start_does_not_mount_docker_socket() {
     assert_not_contains "$calls" "cage.docker" "plain start never sets docker label"
 }
 
+test_dstart_existing_nondocker_reattaches_with_info() {
+    mock_reset
+    mock_uname Linux
+    mock_docker_response "info" 0 ""
+    # cmd_dstart: state check → running
+    mock_docker_response_n "inspect" 1 0 "true"
+    # cmd_dstart: label check → empty (no cage.docker label)
+    mock_docker_response_n "inspect" 2 0 ""
+    # cmd_enter: state check → running
+    mock_docker_response_n "inspect" 3 0 "true"
+    # cmd_enter: image_newer_available container image id
+    mock_docker_response_n "inspect" 4 0 "sha256:same"
+    mock_docker_response "image" 0 "sha256:same"
+    mock_docker_response "attach" 0 ""
+    local out; out="$(run_cage dstart 2>&1)"
+    assert_contains "$out" "already exists without docker" "info message shown"
+    assert_eq "1" "$(mock_call_count attach)" "re-attaches to existing container"
+    assert_eq "0" "$(mock_call_count create)" "does not create a second container"
+    unmock_uname
+}
+
+test_start_reattaches_docker_enabled_silently() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 0 "true"
+    mock_docker_response "image" 1 ""
+    mock_docker_response "attach" 0 ""
+    local out; out="$(run_cage start 2>&1)"
+    assert_not_contains "$out" "DOCKER-ENABLED" "no warning banner on plain start"
+    assert_not_contains "$out" "without docker" "no docker info message on plain start"
+    assert_eq "1" "$(mock_call_count attach)" "re-attaches"
+}
+
 # ================================================================
 # Run all tests
 # ================================================================
@@ -1678,6 +1711,8 @@ main() {
     run_test test_dstart_passes_port_and_volume_flags
     run_test test_dstart_no_group_add_when_gid_unknown
     run_test test_start_does_not_mount_docker_socket
+    run_test test_dstart_existing_nondocker_reattaches_with_info
+    run_test test_start_reattaches_docker_enabled_silently
 
     print_summary
 }
