@@ -937,6 +937,63 @@ test_rmconfig_no_volume() {
 }
 
 # ================================================================
+# Tests: list / obliterate / rmconfig sweep the cage VM daemon
+# ================================================================
+
+test_list_includes_cage_vm_daemon() {
+    mock_reset
+    mock_uname Darwin
+    make_cage_vm_socket
+    mock_docker_response "info" 0 ""
+    mock_docker_response "ps" 0 ""
+    local out; out="$(DOCKER_HOST= run_cage list)"
+    assert_eq "2" "$(mock_call_count ps)" "ps against both daemons"
+    assert_contains "$(mock_env_calls)" "unix://$HOME/.colima/cage/docker.sock ps" "second ps hits cage VM"
+    local headers
+    headers="$(printf '%s\n' "$out" | grep -c "NAMES")" || true
+    assert_eq "1" "$headers" "single header row"
+    remove_cage_vm_socket
+    unmock_uname
+}
+
+test_list_single_daemon_without_cage_vm() {
+    mock_reset
+    mock_uname Darwin
+    mock_docker_response "info" 0 ""
+    mock_docker_response "ps" 0 ""
+    DOCKER_HOST= run_cage list >/dev/null
+    assert_eq "1" "$(mock_call_count ps)" "one ps when no cage VM socket"
+    unmock_uname
+}
+
+test_obliterate_covers_cage_vm() {
+    mock_reset
+    mock_uname Darwin
+    make_cage_vm_socket
+    mock_docker_response "info" 0 ""
+    mock_docker_response "ps" 0 ""
+    mock_docker_response "volume" 1 ""
+    local out; out="$(DOCKER_HOST= run_cage obliterate 2>&1)"
+    assert_eq "2" "$(mock_call_count ps)" "both daemons swept"
+    assert_contains "$out" "colima delete --profile cage" "VM removal hint"
+    remove_cage_vm_socket
+    unmock_uname
+}
+
+test_rmconfig_covers_cage_vm() {
+    mock_reset
+    mock_uname Darwin
+    make_cage_vm_socket
+    mock_docker_response "info" 0 ""
+    mock_docker_response "ps" 0 ""
+    mock_docker_response "volume" 1 ""
+    DOCKER_HOST= run_cage rmconfig >/dev/null 2>&1
+    assert_eq "2" "$(mock_call_count ps)" "both daemons swept"
+    remove_cage_vm_socket
+    unmock_uname
+}
+
+# ================================================================
 # Tests: cmd_restart
 # ================================================================
 
@@ -2088,6 +2145,13 @@ main() {
     run_test test_rmconfig_stops_containers_and_removes_volume
     run_test test_rmconfig_no_containers_removes_volume
     run_test test_rmconfig_no_volume
+
+    echo ""
+    echo "--- list / obliterate / rmconfig sweep cage VM daemon ---"
+    run_test test_list_includes_cage_vm_daemon
+    run_test test_list_single_daemon_without_cage_vm
+    run_test test_obliterate_covers_cage_vm
+    run_test test_rmconfig_covers_cage_vm
 
     echo ""
     echo "--- cmd_restart ---"

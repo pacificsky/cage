@@ -448,7 +448,14 @@ cmd_rm() {
     esac
 }
 
-cmd_rmconfig() {
+# True when this invocation should also sweep the cage VM daemon.
+cage_vm_daemon_reachable() {
+    [[ "$(uname -s)" == "Darwin" ]] || return 1
+    [ -z "${DOCKER_HOST:-}" ] || return 1
+    [ -S "$COLIMA_CAGE_SOCK" ]
+}
+
+rmconfig_daemon() {
     local ids
     ids="$($DOCKER ps -a --filter "label=cage.project" -q)" || true
     if [ -n "$ids" ]; then
@@ -467,7 +474,7 @@ cmd_rmconfig() {
     fi
 }
 
-cmd_obliterate() {
+obliterate_daemon() {
     local ids
     ids="$($DOCKER ps -a --filter "label=cage.project" -q)" || true
     if [ -n "$ids" ]; then
@@ -481,6 +488,23 @@ cmd_obliterate() {
         $DOCKER volume rm "$HOME_VOL"
     else
         info "No shared home volume to remove"
+    fi
+}
+
+cmd_rmconfig() {
+    rmconfig_daemon
+    if cage_vm_daemon_reachable; then
+        info "Cleaning the cage VM daemon"
+        ( export DOCKER_HOST="unix://$COLIMA_CAGE_SOCK"; rmconfig_daemon )
+    fi
+}
+
+cmd_obliterate() {
+    obliterate_daemon
+    if cage_vm_daemon_reachable; then
+        info "Cleaning the cage VM daemon"
+        ( export DOCKER_HOST="unix://$COLIMA_CAGE_SOCK"; obliterate_daemon )
+        info "To remove the cage VM entirely: colima delete --profile $COLIMA_PROFILE"
     fi
 }
 
@@ -511,13 +535,16 @@ cmd_status() {
     fi
 }
 
-cmd_list() {
+list_daemon_containers() {
+    local show_header="$1"
     # Docker uses .Label "key"; Podman uses index .Labels "key".
     local label_tpl='{{.Label "cage.project"}}'
     [ "$DOCKER" = "podman" ] && label_tpl='{{index .Labels "cage.project"}}'
 
     local fmt="%-35s %-25s %-32s %s\n"
-    printf "$fmt" "NAMES" "STATUS" "IMAGE" "PROJECT"
+    if [ "$show_header" = "with_header" ]; then
+        printf "$fmt" "NAMES" "STATUS" "IMAGE" "PROJECT"
+    fi
 
     # Collect container rows from docker ps.
     local -a names=() statuses=() projects=() images=()
@@ -603,6 +630,13 @@ cmd_list() {
         fi
         printf "$fmt" "${names[$i]}" "${statuses[$i]}" "$img_desc" "${projects[$i]}"
     done
+}
+
+cmd_list() {
+    list_daemon_containers with_header
+    if cage_vm_daemon_reachable; then
+        ( export DOCKER_HOST="unix://$COLIMA_CAGE_SOCK"; list_daemon_containers no_header )
+    fi
 }
 
 cmd_shell() {
