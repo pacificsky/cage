@@ -130,8 +130,15 @@ preserve_docker_mode() {
     return 0
 }
 
-# Real body arrives in Task 9 (image docker-CLI presence warning).
-check_docker_cli_in_image() { :; }
+# Warn (never fail) when the image lacks the docker CLI — compose work
+# inside a docker-enabled cage needs it.  Images without sh also trip
+# this check; the warning is advisory either way.
+check_docker_cli_in_image() {
+    if ! $DOCKER run --rm --entrypoint sh "$IMAGE" -c 'command -v docker' >/dev/null 2>&1; then
+        info "Warning: image $IMAGE has no docker CLI — 'docker' commands inside the cage will fail."
+        info "Use an image that ships the docker CLI and compose plugin."
+    fi
+}
 
 container_name() {
     local abs_path="$1"

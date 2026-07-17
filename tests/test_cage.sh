@@ -1088,6 +1088,50 @@ test_upgrade_preserves_docker_mode() {
     unmock_uname
 }
 
+test_dstart_warns_when_image_lacks_docker_cli() {
+    mock_reset
+    mock_uname Linux
+    mock_stat_gid 999
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "run" 1 ""      # command -v docker fails in image
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    local out; out="$(run_cage dstart 2>&1)"
+    assert_contains "$out" "no docker CLI" "warning shown"
+    assert_eq "1" "$(mock_call_count create)" "creation proceeds anyway"
+    unmock_stat
+    unmock_uname
+}
+
+test_dstart_no_warning_when_docker_cli_present() {
+    mock_reset
+    mock_uname Linux
+    mock_stat_gid 999
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "run" 0 "/usr/bin/docker"
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    local out; out="$(run_cage dstart 2>&1)"
+    assert_not_contains "$out" "no docker CLI" "no warning when CLI present"
+    unmock_stat
+    unmock_uname
+}
+
+test_start_never_runs_cli_check() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    run_cage start >/dev/null 2>&1 || true
+    assert_eq "0" "$(mock_call_count run)" "plain start never docker-runs the image"
+}
+
 # ================================================================
 # Tests: cmd_update
 # ================================================================
@@ -2160,6 +2204,9 @@ main() {
     run_test test_restart_preserves_docker_mode
     run_test test_restart_plain_container_stays_plain
     run_test test_upgrade_preserves_docker_mode
+    run_test test_dstart_warns_when_image_lacks_docker_cli
+    run_test test_dstart_no_warning_when_docker_cli_present
+    run_test test_start_never_runs_cli_check
 
     echo ""
     echo "--- cmd_update ---"
