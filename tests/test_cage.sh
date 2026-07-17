@@ -1573,6 +1573,100 @@ test_dstart_existing_nondocker_reattaches_with_info() {
     unmock_uname
 }
 
+# ================================================================
+# Tests: cmd_dstart (macOS contained mode)
+# ================================================================
+
+# Build a restricted PATH dir containing the mock docker + core tools,
+# optionally without colima, to simulate its absence (the dev machine or
+# CI may have a real colima on PATH).
+make_restricted_bin() {
+    local bin_dir="$MOCK_DIR/restricted-bin"
+    rm -rf "$bin_dir"
+    mkdir -p "$bin_dir"
+    cp "$MOCK_DIR/docker" "$bin_dir/docker"
+    # The mock resolves calls/responses relative to its own directory —
+    # symlink them back to the shared ones so mock_docker_response and
+    # mock_call_count keep working for the copied binary.
+    ln -sf "$MOCK_RESPONSES_DIR" "$bin_dir/responses"
+    ln -sf "$MOCK_CALLS_FILE" "$bin_dir/calls"
+    printf '#!/usr/bin/env bash\necho Darwin\n' > "$bin_dir/uname"
+    chmod +x "$bin_dir/uname" "$bin_dir/docker"
+    local cmd cmd_path
+    for cmd in bash printf basename shasum cut grep head tail cat sed xargs id tr stat mktemp ls cp rm mkdir dirname; do
+        cmd_path="$(command -v "$cmd" 2>/dev/null)" || true
+        [ -n "$cmd_path" ] && ln -sf "$cmd_path" "$bin_dir/$cmd"
+    done
+    echo "$bin_dir"
+}
+
+test_dstart_macos_requires_colima() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    local bin_dir; bin_dir="$(make_restricted_bin)"
+    local out rc=0
+    out="$(PATH="$bin_dir" run_cage dstart 2>&1)" || rc=$?
+    assert_eq "1" "$rc" "exit code"
+    assert_contains "$out" "brew install colima" "install hint"
+    assert_contains "$out" "github.com/pacificsky/cage" "issues link for other runtimes"
+    rm -rf "$bin_dir"
+}
+
+test_dstart_macos_requires_docker_cli() {
+    mock_reset
+    local bin_dir; bin_dir="$(make_restricted_bin)"
+    # podman present, docker absent → cage falls back to podman.
+    mv "$bin_dir/docker" "$bin_dir/podman"
+    # colima present.
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$bin_dir/colima"
+    chmod +x "$bin_dir/colima"
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    local out rc=0
+    out="$(PATH="$bin_dir" run_cage dstart 2>&1)" || rc=$?
+    assert_eq "1" "$rc" "exit code"
+    assert_contains "$out" "docker CLI" "explains docker CLI requirement"
+    rm -rf "$bin_dir"
+}
+
+test_dstart_macos_project_outside_src_root() {
+    mock_reset
+    mock_uname Darwin
+    # colima present (simple mock; richer mock arrives in Task 5).
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$MOCK_DIR/colima"
+    chmod +x "$MOCK_DIR/colima"
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    # Project dir outside the default CAGE_SRC_ROOT ($HOME/src).
+    local pdir; pdir="$(mktemp -d)"
+    local out rc=0
+    out="$( (cd "$pdir" && DOCKER_HOST= bash "$CAGE_SH" dstart 2>&1) )" || rc=$?
+    assert_eq "1" "$rc" "exit code"
+    assert_contains "$out" "CAGE_SRC_ROOT" "mentions the knob"
+    assert_not_contains "$out" "colima delete" "no delete hint when profile absent"
+    rm -rf "$pdir" "$MOCK_DIR/colima"
+    unmock_uname
+}
+
+test_dstart_macos_src_root_change_hint() {
+    mock_reset
+    mock_uname Darwin
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$MOCK_DIR/colima"
+    chmod +x "$MOCK_DIR/colima"
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    # Profile dir exists → error must include the delete hint.
+    mkdir -p "$HOME/.colima/cage"
+    local pdir; pdir="$(mktemp -d)"
+    local out rc=0
+    out="$( (cd "$pdir" && DOCKER_HOST= bash "$CAGE_SH" dstart 2>&1) )" || rc=$?
+    assert_eq "1" "$rc" "exit code"
+    assert_contains "$out" "colima delete --profile cage" "delete hint when profile exists"
+    rm -rf "$pdir" "$MOCK_DIR/colima" "$HOME/.colima"
+    unmock_uname
+}
+
 test_start_reattaches_docker_enabled_silently() {
     mock_reset
     mock_docker_response "info" 0 ""
@@ -1750,6 +1844,13 @@ main() {
     run_test test_start_does_not_mount_docker_socket
     run_test test_dstart_existing_nondocker_reattaches_with_info
     run_test test_start_reattaches_docker_enabled_silently
+
+    echo ""
+    echo "--- cmd_dstart (macOS contained mode) ---"
+    run_test test_dstart_macos_requires_colima
+    run_test test_dstart_macos_requires_docker_cli
+    run_test test_dstart_macos_project_outside_src_root
+    run_test test_dstart_macos_src_root_change_hint
 
     print_summary
 }

@@ -297,6 +297,35 @@ cmd_enter() {
     esac
 }
 
+# macOS contained mode: validate prerequisites and (Task 5) target the
+# dedicated colima 'cage' profile whose VM mounts only CAGE_SRC_ROOT.
+setup_colima_cage() {
+    local project_dir="$1"
+
+    command -v colima &>/dev/null || die "dstart on macOS requires colima (brew install colima).
+       Docker Desktop / OrbStack sockets would hand the agent your file-shared home directory,
+       so cage only supports colima here.  Want another runtime supported?
+       Open an issue: https://github.com/pacificsky/cage/issues"
+
+    [ "$DOCKER" = "docker" ] || die "dstart on macOS requires the docker CLI (colima's docker runtime). Install it: brew install docker"
+
+    local src_root
+    src_root="$(cage_config_get CAGE_SRC_ROOT)"
+    src_root="${src_root:-$HOME/src}"
+    src_root="${src_root%/}"
+
+    case "$project_dir/" in
+        "$src_root"/*) ;;
+        *)
+            local hint=""
+            if [ -d "$HOME/.colima/$COLIMA_PROFILE" ]; then
+                hint=" Note: the cage VM keeps the mounts it was created with — after changing CAGE_SRC_ROOT, run 'colima delete --profile $COLIMA_PROFILE' and dstart again."
+            fi
+            die "project $project_dir is outside CAGE_SRC_ROOT ($src_root), so it can't be mounted into the cage VM. Set CAGE_SRC_ROOT in ~/.config/cage/env or move the project.$hint"
+            ;;
+    esac
+}
+
 cmd_dstart() {
     local project_dir="$1"
     shift
@@ -305,7 +334,8 @@ cmd_dstart() {
     name="$(container_name "$project_dir")"
 
     if [[ "$(uname -s)" == "Darwin" ]]; then
-        die "dstart on macOS lands in Task 4"   # placeholder, replaced in Task 4
+        setup_colima_cage "$project_dir"
+        CAGE_DOCKER_MODE="colima"
     else
         CAGE_DOCKER_MODE="host"
         cage_banner_docker_warning
