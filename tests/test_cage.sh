@@ -109,6 +109,7 @@ setup_mock() {
     MOCK_RESPONSES_DIR="$MOCK_DIR/responses"
     mkdir -p "$MOCK_RESPONSES_DIR"
     touch "$MOCK_CALLS_FILE"
+    touch "$MOCK_DIR/env_calls"
 
     # Sandbox: cage.sh reads $HOME/.ssh, $HOME/.gitconfig, etc. to build
     # docker -v flags.  Point HOME at a throwaway directory so the tests
@@ -127,6 +128,7 @@ RESPONSES_DIR="$MOCK_DIR/responses"
 
 # Record the full invocation.
 echo "$*" >> "$CALLS_FILE"
+echo "${DOCKER_HOST:-<unset>} $*" >> "$MOCK_DIR/env_calls"
 
 # Determine the subcommand (first positional arg).
 subcmd="${1:-}"
@@ -198,6 +200,9 @@ mock_docker_response_n() {
 # Return all recorded docker invocations (one per line).
 mock_calls() { cat "$MOCK_CALLS_FILE"; }
 
+# Return recorded invocations prefixed with the DOCKER_HOST each saw.
+mock_env_calls() { cat "$MOCK_DIR/env_calls" 2>/dev/null; }
+
 # Count how many times a subcommand was invoked.
 mock_call_count() {
     local subcmd="$1"
@@ -209,7 +214,46 @@ mock_call_count() {
 # Clear recorded calls and responses between tests.
 mock_reset() {
     : > "$MOCK_CALLS_FILE"
+    : > "$MOCK_DIR/env_calls"
     rm -f "$MOCK_RESPONSES_DIR"/*
+}
+
+# --- mock colima (records calls; responses keyed by subcommand) ---
+setup_colima_mock() {
+    mkdir -p "$MOCK_DIR/colima_responses"
+    : > "$MOCK_DIR/colima_calls"
+    cat > "$MOCK_DIR/colima" <<'COLIMA_MOCK'
+#!/usr/bin/env bash
+MOCK_DIR="$(cd "$(dirname "$0")" && pwd)"
+echo "$*" >> "$MOCK_DIR/colima_calls"
+subcmd="${1:-}"
+resp="$MOCK_DIR/colima_responses/$subcmd"
+if [ -f "$resp" ]; then
+    exit_code="$(head -1 "$resp")"
+    tail -n +2 "$resp"
+    exit "$exit_code"
+fi
+exit 0
+COLIMA_MOCK
+    chmod +x "$MOCK_DIR/colima"
+}
+
+mock_colima_response() {
+    local subcmd="$1" exit_code="$2" output="${3:-}"
+    mkdir -p "$MOCK_DIR/colima_responses"
+    if [ -n "$output" ]; then
+        printf '%s\n%s\n' "$exit_code" "$output" > "$MOCK_DIR/colima_responses/$subcmd"
+    else
+        printf '%s\n' "$exit_code" > "$MOCK_DIR/colima_responses/$subcmd"
+    fi
+}
+
+colima_calls() { cat "$MOCK_DIR/colima_calls" 2>/dev/null; }
+
+teardown_colima_mock() {
+    rm -f "$MOCK_DIR/colima"
+    rm -rf "$MOCK_DIR/colima_responses"
+    rm -f "$MOCK_DIR/colima_calls"
 }
 
 # ================================================================
@@ -1668,6 +1712,101 @@ test_dstart_macos_src_root_change_hint() {
     unmock_uname
 }
 
+# Shared setup for macOS contained-mode happy-path tests: Darwin uname,
+# colima mock, a project under the fake $HOME/src, standard docker mocks.
+# Sets globals: DPDIR (project dir).
+setup_dstart_macos() {
+    mock_reset
+    mock_uname Darwin
+    setup_colima_mock
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    DPDIR="$HOME/src/myproj"
+    mkdir -p "$DPDIR"
+}
+
+teardown_dstart_macos() {
+    teardown_colima_mock
+    unmock_uname
+    [ "$HOME" = "$FAKE_HOME" ] && rm -rf "$HOME/src"
+}
+
+run_dstart_macos() {
+    (cd "$DPDIR" && DOCKER_HOST= bash "$CAGE_SH" dstart 2>&1)
+}
+
+test_dstart_macos_provisions_vm_first_run() {
+    setup_dstart_macos
+    mock_colima_response "status" 1 ""        # VM not running
+    mock_colima_response "ssh" 0 "998"        # socket gid inside the VM
+    local out; out="$(run_dstart_macos)" || true
+    assert_contains "$(colima_calls)" "start --profile cage --mount $HOME/src:w --ssh-agent --cpu 4 --memory 8" "provision command"
+    assert_contains "$out" "cage VM" "explains the one-time provision"
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "cage.docker=colima" "colima mode label"
+    assert_contains "$calls" "-v /var/run/docker.sock:/var/run/docker.sock" "VM socket mounted"
+    assert_contains "$calls" "--group-add 998" "gid discovered via colima ssh"
+    teardown_dstart_macos
+}
+
+test_dstart_macos_skips_provision_when_vm_running() {
+    setup_dstart_macos
+    mock_colima_response "status" 0 "running"
+    mock_colima_response "ssh" 0 "998"
+    run_dstart_macos >/dev/null || true
+    assert_not_contains "$(colima_calls)" "start --profile" "no provision when VM runs"
+    assert_contains "$(mock_calls)" "cage.docker=colima" "container still created in VM"
+    teardown_dstart_macos
+}
+
+test_dstart_macos_vm_size_configurable() {
+    setup_dstart_macos
+    mock_colima_response "status" 1 ""
+    mock_colima_response "ssh" 0 "998"
+    mkdir -p "$HOME/.config/cage"
+    printf 'CAGE_VM_CPU=8\nCAGE_VM_MEMORY=16\n' > "$HOME/.config/cage/env"
+    run_dstart_macos >/dev/null || true
+    assert_contains "$(colima_calls)" "--cpu 8 --memory 16" "VM size from config file"
+    rm -f "$HOME/.config/cage/env"
+    teardown_dstart_macos
+}
+
+test_dstart_macos_targets_cage_vm_daemon() {
+    setup_dstart_macos
+    mock_colima_response "status" 0 "running"
+    mock_colima_response "ssh" 0 "998"
+    run_dstart_macos >/dev/null || true
+    assert_contains "$(mock_env_calls)" "unix://$HOME/.colima/cage/docker.sock create" "create ran against the cage VM daemon"
+    teardown_dstart_macos
+}
+
+test_dstart_macos_colima_start_failure_hint() {
+    setup_dstart_macos
+    mock_colima_response "status" 1 ""
+    mock_colima_response "start" 1 "some colima error"
+    local out rc=0
+    out="$(run_dstart_macos)" || rc=$?
+    assert_eq "1" "$rc" "exit code"
+    assert_contains "$out" "colima delete --profile cage" "corrupt-profile hint"
+    teardown_dstart_macos
+}
+
+test_dstart_macos_conflicts_with_default_daemon_container() {
+    setup_dstart_macos
+    mock_colima_response "status" 0 "running"
+    # Default daemon already has a NON-docker container for this project.
+    mock_docker_response_n "inspect" 1 0 "true"   # state in default daemon
+    mock_docker_response_n "inspect" 2 0 ""       # label empty
+    local out rc=0
+    out="$(run_dstart_macos)" || rc=$?
+    assert_eq "1" "$rc" "exit code"
+    assert_contains "$out" "cage rm" "tells user to remove the old cage first"
+    teardown_dstart_macos
+}
+
 test_start_reattaches_docker_enabled_silently() {
     mock_reset
     mock_docker_response "info" 0 ""
@@ -1852,6 +1991,12 @@ main() {
     run_test test_dstart_macos_requires_docker_cli
     run_test test_dstart_macos_project_outside_src_root
     run_test test_dstart_macos_src_root_change_hint
+    run_test test_dstart_macos_provisions_vm_first_run
+    run_test test_dstart_macos_skips_provision_when_vm_running
+    run_test test_dstart_macos_vm_size_configurable
+    run_test test_dstart_macos_targets_cage_vm_daemon
+    run_test test_dstart_macos_colima_start_failure_hint
+    run_test test_dstart_macos_conflicts_with_default_daemon_container
 
     print_summary
 }

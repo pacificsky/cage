@@ -324,6 +324,23 @@ setup_colima_cage() {
             die "project $project_dir is outside CAGE_SRC_ROOT ($src_root), so it can't be mounted into the cage VM. Set CAGE_SRC_ROOT in ~/.config/cage/env or move the project.$hint"
             ;;
     esac
+
+    if ! colima status --profile "$COLIMA_PROFILE" >/dev/null 2>&1; then
+        local cpu memory
+        cpu="$(cage_config_get CAGE_VM_CPU)"
+        cpu="${cpu:-4}"
+        memory="$(cage_config_get CAGE_VM_MEMORY)"
+        memory="${memory:-8}"
+        info "Starting the cage VM (first run provisions it — takes about a minute)..."
+        colima start --profile "$COLIMA_PROFILE" \
+            --mount "${src_root}:w" \
+            --ssh-agent \
+            --cpu "$cpu" \
+            --memory "$memory" \
+            || die "colima failed to start the cage VM. If the profile is corrupt, try: colima delete --profile $COLIMA_PROFILE"
+    fi
+
+    export DOCKER_HOST="unix://$COLIMA_CAGE_SOCK"
 }
 
 cmd_dstart() {
@@ -334,6 +351,14 @@ cmd_dstart() {
     name="$(container_name "$project_dir")"
 
     if [[ "$(uname -s)" == "Darwin" ]]; then
+        # A pre-existing non-docker cage lives in the default daemon; a
+        # docker-enabled one would live in the cage VM.  Two containers for
+        # one project is a footgun — refuse and let the user pick.
+        if $DOCKER info >/dev/null 2>&1 \
+            && [ "$(container_state "$name")" != "none" ] \
+            && [ -z "$(container_docker_mode "$name")" ]; then
+            die "this project already has a cage without docker in the default daemon. Run 'cage rm' first, then 'cage dstart'."
+        fi
         setup_colima_cage "$project_dir"
         CAGE_DOCKER_MODE="colima"
     else
