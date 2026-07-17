@@ -1663,7 +1663,8 @@ test_dstart_macos_src_root_change_hint() {
     out="$( (cd "$pdir" && DOCKER_HOST= bash "$CAGE_SH" dstart 2>&1) )" || rc=$?
     assert_eq "1" "$rc" "exit code"
     assert_contains "$out" "colima delete --profile cage" "delete hint when profile exists"
-    rm -rf "$pdir" "$MOCK_DIR/colima" "$HOME/.colima"
+    rm -rf "$pdir" "$MOCK_DIR/colima"
+    [ "$HOME" = "$FAKE_HOME" ] && rm -rf "$HOME/.colima"
     unmock_uname
 }
 
