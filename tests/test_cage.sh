@@ -1820,6 +1820,102 @@ test_start_reattaches_docker_enabled_silently() {
 }
 
 # ================================================================
+# Tests: cross-daemon routing (macOS cage VM)
+# ================================================================
+
+# Create a real unix socket at the cage VM socket path (under FAKE_HOME).
+make_cage_vm_socket() {
+    mkdir -p "$HOME/.colima/cage"
+    python3 -c "
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.bind(sys.argv[1])
+" "$HOME/.colima/cage/docker.sock"
+}
+
+remove_cage_vm_socket() {
+    [ "$HOME" = "$FAKE_HOME" ] && rm -rf "$HOME/.colima"
+    return 0
+}
+
+test_stop_routes_to_cage_vm() {
+    mock_reset
+    mock_uname Darwin
+    make_cage_vm_socket
+    mock_docker_response "info" 0 ""
+    mock_docker_response_n "inspect" 1 1 ""        # not in default daemon
+    mock_docker_response_n "inspect" 2 0 "exists"  # routing probe finds it in VM
+    mock_docker_response_n "inspect" 3 0 "true"    # state after routing: running
+    mock_docker_response "stop" 0 ""
+    local out; out="$(DOCKER_HOST= run_cage stop 2>&1)"
+    assert_contains "$out" "Stopping" "container stopped"
+    assert_contains "$(mock_env_calls)" "unix://$HOME/.colima/cage/docker.sock stop" "stop ran against cage VM daemon"
+    remove_cage_vm_socket
+    unmock_uname
+}
+
+test_status_routes_to_cage_vm() {
+    mock_reset
+    mock_uname Darwin
+    make_cage_vm_socket
+    mock_docker_response "info" 0 ""
+    mock_docker_response_n "inspect" 1 1 ""
+    mock_docker_response_n "inspect" 2 0 "exists"
+    mock_docker_response_n "inspect" 3 0 "true"    # state
+    mock_docker_response_n "inspect" 4 0 "colima"  # cage.docker label
+    mock_docker_response "port" 0 ""
+    local out; out="$(DOCKER_HOST= run_cage status)"
+    assert_contains "$out" "State:     running" "found the VM container"
+    assert_contains "$out" "Docker:    colima" "docker mode from VM container"
+    remove_cage_vm_socket
+    unmock_uname
+}
+
+test_no_routing_without_cage_vm_socket() {
+    mock_reset
+    mock_uname Darwin
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    local out rc=0
+    out="$(DOCKER_HOST= run_cage stop 2>&1)" || rc=$?
+    assert_eq "1" "$rc" "exit code"
+    assert_contains "$out" "No container" "plain not-found error"
+    unmock_uname
+}
+
+test_no_routing_on_linux() {
+    mock_reset
+    mock_uname Linux
+    make_cage_vm_socket
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    local out rc=0
+    out="$(DOCKER_HOST= run_cage stop 2>&1)" || rc=$?
+    assert_eq "1" "$rc" "exit code"
+    assert_eq "1" "$(mock_call_count inspect)" "no routing probe on Linux"
+    remove_cage_vm_socket
+    unmock_uname
+}
+
+test_start_reattaches_via_routing() {
+    mock_reset
+    mock_uname Darwin
+    make_cage_vm_socket
+    mock_docker_response "info" 0 ""
+    mock_docker_response_n "inspect" 1 1 ""        # not in default daemon
+    mock_docker_response_n "inspect" 2 0 "exists"  # probe
+    mock_docker_response_n "inspect" 3 0 "true"    # state: running
+    mock_docker_response_n "inspect" 4 0 "sha256:same"  # image_newer_available
+    mock_docker_response "image" 0 "sha256:same"
+    mock_docker_response "attach" 0 ""
+    DOCKER_HOST= run_cage start >/dev/null 2>&1 || true
+    assert_eq "0" "$(mock_call_count create)" "no new container created"
+    assert_contains "$(mock_env_calls)" "unix://$HOME/.colima/cage/docker.sock attach" "attached to VM container"
+    remove_cage_vm_socket
+    unmock_uname
+}
+
+# ================================================================
 # Run all tests
 # ================================================================
 
@@ -1997,6 +2093,14 @@ main() {
     run_test test_dstart_macos_targets_cage_vm_daemon
     run_test test_dstart_macos_colima_start_failure_hint
     run_test test_dstart_macos_conflicts_with_default_daemon_container
+
+    echo ""
+    echo "--- cross-daemon routing (macOS cage VM) ---"
+    run_test test_stop_routes_to_cage_vm
+    run_test test_status_routes_to_cage_vm
+    run_test test_no_routing_without_cage_vm_socket
+    run_test test_no_routing_on_linux
+    run_test test_start_reattaches_via_routing
 
     print_summary
 }

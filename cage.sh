@@ -103,6 +103,20 @@ container_docker_mode() {
     echo "$mode"
 }
 
+# On macOS a project's container may live in the cage colima VM rather than
+# the default daemon.  If it isn't found locally, retarget this invocation.
+route_to_container() {
+    local name="$1"
+    [[ "$(uname -s)" == "Darwin" ]] || return 0
+    [ -n "${DOCKER_HOST:-}" ] && return 0          # already targeted
+    [ -S "$COLIMA_CAGE_SOCK" ] || return 0         # no cage VM → nothing to route to
+    [ "$(container_state "$name")" = "none" ] || return 0
+    if DOCKER_HOST="unix://$COLIMA_CAGE_SOCK" $DOCKER inspect "$name" >/dev/null 2>&1; then
+        export DOCKER_HOST="unix://$COLIMA_CAGE_SOCK"
+    fi
+    return 0
+}
+
 # Real body arrives in Task 9 (image docker-CLI presence warning).
 check_docker_cli_in_image() { :; }
 
@@ -196,6 +210,7 @@ cmd_enter() {
 
     local name
     name="$(container_name "$project_dir")"
+    route_to_container "$name"
     local state
     state="$(container_state "$name")"
 
@@ -379,6 +394,7 @@ cmd_stop() {
     local project_dir="$1"
     local name
     name="$(container_name "$project_dir")"
+    route_to_container "$name"
     local state
     state="$(container_state "$name")"
 
@@ -400,6 +416,7 @@ cmd_rm() {
     local project_dir="$1"
     local name
     name="$(container_name "$project_dir")"
+    route_to_container "$name"
     local state
     state="$(container_state "$name")"
 
@@ -458,6 +475,7 @@ cmd_status() {
     local project_dir="$1"
     local name
     name="$(container_name "$project_dir")"
+    route_to_container "$name"
     local state
     state="$(container_state "$name")"
 
@@ -578,6 +596,7 @@ cmd_shell() {
     local project_dir="$1"
     local name
     name="$(container_name "$project_dir")"
+    route_to_container "$name"
     local state
     state="$(container_state "$name")"
 
