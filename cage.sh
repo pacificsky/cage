@@ -410,6 +410,10 @@ cmd_status() {
     echo "State:     $state"
 
     if [ "$state" != "none" ]; then
+        local dmode
+        dmode="$(container_docker_mode "$name")"
+        echo "Docker:    ${dmode:-none}"
+
         local ports
         ports="$($DOCKER port "$name" 2>/dev/null)" || true
         if [ -n "$ports" ]; then

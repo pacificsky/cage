@@ -408,6 +408,40 @@ test_status_no_ports_when_none() {
     assert_not_contains "$out" "Ports:" "no port section when state=none"
 }
 
+test_status_shows_docker_host() {
+    mock_reset
+    mock_uname Linux
+    mock_docker_response "info" 0 ""
+    mock_docker_response_n "inspect" 1 0 "true"   # state
+    mock_docker_response_n "inspect" 2 0 "host"   # cage.docker label
+    mock_docker_response "port" 0 ""
+    local out; out="$(run_cage status)"
+    assert_contains "$out" "Docker:    host" "docker mode shown"
+    unmock_uname
+}
+
+test_status_shows_docker_none() {
+    mock_reset
+    mock_uname Linux
+    mock_docker_response "info" 0 ""
+    mock_docker_response_n "inspect" 1 0 "true"
+    mock_docker_response_n "inspect" 2 0 ""
+    mock_docker_response "port" 0 ""
+    local out; out="$(run_cage status)"
+    assert_contains "$out" "Docker:    none" "docker: none for plain cage"
+    unmock_uname
+}
+
+test_status_no_docker_line_when_no_container() {
+    mock_reset
+    mock_uname Linux
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    local out; out="$(run_cage status)"
+    assert_not_contains "$out" "Docker:" "no docker line when state=none"
+    unmock_uname
+}
+
 # ================================================================
 # Tests: cmd_stop
 # ================================================================
@@ -1593,6 +1627,9 @@ main() {
     run_test test_status_shows_none
     run_test test_status_shows_container_name
     run_test test_status_no_ports_when_none
+    run_test test_status_shows_docker_host
+    run_test test_status_shows_docker_none
+    run_test test_status_no_docker_line_when_no_container
 
     echo ""
     echo "--- cmd_stop ---"
