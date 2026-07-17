@@ -4,6 +4,9 @@ set -euo pipefail
 VERSION="0.8.0"
 IMAGE="${CAGE_IMAGE:-ghcr.io/pacificsky/devcontainer-lite:latest}"
 HOME_VOL="cage-home"
+COLIMA_PROFILE="cage"
+COLIMA_CAGE_SOCK="$HOME/.colima/cage/docker.sock"
+CAGE_DOCKER_MODE=""   # "", "host", or "colima" — set by dstart / preserve_docker_mode
 
 # Detect container runtime: prefer docker, fall back to podman.
 if command -v docker &>/dev/null; then
@@ -46,6 +49,62 @@ drop_into_cage() {
     cage_banner_exit "$name"
     return $rc
 }
+
+cage_banner_docker_warning() {
+    local c="\033[1;31m" r="\033[0m"
+    local line="═══════════════════════════════════════════════════════════════"
+    printf '%b\n' "${c}${line}${r}" >&2
+    printf '%b\n' "${c}  ⚠  DOCKER-ENABLED CAGE (trusted mode)${r}" >&2
+    printf '%b\n' "${c}  ⚠  The agent holds the host docker socket — root-equivalent${r}" >&2
+    printf '%b\n' "${c}  ⚠  access to this machine.${r}" >&2
+    printf '%b\n' "${c}${line}${r}" >&2
+}
+
+# Read KEY from the environment, falling back to ~/.config/cage/env
+# (docker env-file format).  Last occurrence wins, matching --env-file.
+cage_config_get() {
+    local key="$1"
+    local val="${!key:-}"
+    if [ -z "$val" ] && [ -f "$HOME/.config/cage/env" ]; then
+        val="$(grep -E "^${key}=" "$HOME/.config/cage/env" 2>/dev/null | tail -1 | cut -d= -f2-)" || true
+    fi
+    val="${val/#\~/$HOME}"
+    echo "$val"
+}
+
+# Host-side path of the daemon socket to mount into a docker-enabled cage.
+docker_socket_path() {
+    if [ "$CAGE_DOCKER_MODE" = "colima" ]; then
+        # Resolved by the colima-cage daemon, so this path is inside the VM.
+        echo "/var/run/docker.sock"
+    elif [ "$DOCKER" = "podman" ]; then
+        local rootless="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
+        if [ -S "$rootless" ]; then echo "$rootless"; else echo "/run/podman/podman.sock"; fi
+    else
+        echo "/var/run/docker.sock"
+    fi
+}
+
+# Numeric gid owning the daemon socket, so the non-root container user can
+# be added to it with --group-add.  Empty output = unknown (skip group-add).
+docker_socket_gid() {
+    if [ "$CAGE_DOCKER_MODE" = "colima" ]; then
+        colima ssh --profile "$COLIMA_PROFILE" -- stat -c %g /var/run/docker.sock 2>/dev/null | tr -d '[:space:]' || true
+    else
+        stat -c %g "$(docker_socket_path)" 2>/dev/null | tr -d '[:space:]' || true
+    fi
+}
+
+# The cage.docker label of an existing container: "host", "colima", or "".
+container_docker_mode() {
+    local mode
+    mode="$($DOCKER inspect -f '{{index .Config.Labels "cage.docker"}}' "$1" 2>/dev/null)" || mode=""
+    [ "$mode" = "<no value>" ] && mode=""
+    echo "$mode"
+}
+
+# Real body arrives in Task 9 (image docker-CLI presence warning).
+check_docker_cli_in_image() { :; }
 
 container_name() {
     local abs_path="$1"
@@ -200,6 +259,20 @@ cmd_enter() {
             [[ -f "$global_env" ]] && env_file_args+=(--env-file "$global_env")
             [[ -f "$project_env" ]] && env_file_args+=(--env-file "$project_env")
 
+            # Docker-enabled cage: mount the daemon socket and record the mode.
+            local -a docker_args=()
+            if [ -n "$CAGE_DOCKER_MODE" ]; then
+                local sock gid
+                sock="$(docker_socket_path)"
+                docker_args=(
+                    -v "${sock}:/var/run/docker.sock"
+                    -l "cage.docker=${CAGE_DOCKER_MODE}"
+                )
+                gid="$(docker_socket_gid)"
+                [ -n "$gid" ] && docker_args+=(--group-add "$gid")
+                check_docker_cli_in_image
+            fi
+
             $DOCKER create -it \
                 --name "$name" \
                 --hostname "$name" \
@@ -208,6 +281,7 @@ cmd_enter() {
                 "${mount_args[@]}" \
                 ${ssh_agent_args[@]+"${ssh_agent_args[@]}"} \
                 ${env_file_args[@]+"${env_file_args[@]}"} \
+                ${docker_args[@]+"${docker_args[@]}"} \
                 -e UV_PROJECT_ENVIRONMENT=.cage-venv \
                 -e HOST_UID="$(id -u)" \
                 -e HOST_GID="$(id -g)" \
@@ -221,6 +295,29 @@ cmd_enter() {
             fi
             ;;
     esac
+}
+
+cmd_dstart() {
+    local project_dir="$1"
+    shift
+
+    local name
+    name="$(container_name "$project_dir")"
+
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        die "dstart on macOS lands in Task 4"   # placeholder, replaced in Task 4
+    else
+        CAGE_DOCKER_MODE="host"
+        cage_banner_docker_warning
+    fi
+
+    ensure_docker
+
+    if [ "$(container_state "$name")" != "none" ] && [ -z "$(container_docker_mode "$name")" ]; then
+        info "Container already exists without docker — re-attaching. Use 'cage rm' then 'cage dstart' to enable docker."
+    fi
+
+    cmd_enter "$project_dir" "$@"
 }
 
 cmd_stop() {
@@ -524,8 +621,8 @@ main() {
                 cmd_help ;;
         -V|--version|version)
                 echo "cage $VERSION" ;;
-        start)
-            # Parse -p and -v flags after start subcommand
+        start|dstart)
+            # Parse -p and -v flags after the subcommand
             local -a port_flags=() vol_flags=()
             while [ $# -gt 0 ]; do
                 case "$1" in
@@ -539,11 +636,15 @@ main() {
                         vol_flags+=(-v "$2")
                         shift 2
                         ;;
-                    *)  die "Unknown flag for start: $1" ;;
+                    *)  die "Unknown flag for ${cmd}: $1" ;;
                 esac
             done
-            ensure_docker
-            cmd_enter "$project_dir" ${port_flags[@]+"${port_flags[@]}"} ${vol_flags[@]+"${vol_flags[@]}"}
+            if [ "$cmd" = "dstart" ]; then
+                cmd_dstart "$project_dir" ${port_flags[@]+"${port_flags[@]}"} ${vol_flags[@]+"${vol_flags[@]}"}
+            else
+                ensure_docker
+                cmd_enter "$project_dir" ${port_flags[@]+"${port_flags[@]}"} ${vol_flags[@]+"${vol_flags[@]}"}
+            fi
             ;;
         stop)   ensure_docker; cmd_stop "$project_dir" ;;
         rm)     ensure_docker; cmd_rm "$project_dir" ;;

@@ -1418,6 +1418,107 @@ test_reattach_does_not_use_env_files() {
 }
 
 # ================================================================
+# Tests: cmd_dstart (Linux trusted mode)
+# ================================================================
+
+# dstart behavior is platform-dependent; these helpers pin the platform.
+mock_uname() {
+    printf '#!/usr/bin/env bash\necho "%s"\n' "$1" > "$MOCK_DIR/uname"
+    chmod +x "$MOCK_DIR/uname"
+}
+unmock_uname() { rm -f "$MOCK_DIR/uname"; }
+
+# docker_socket_gid runs `stat -c %g <socket>`; the real socket doesn't
+# exist in tests, so mock stat to return a fixed gid.
+mock_stat_gid() {
+    printf '#!/usr/bin/env bash\necho "%s"\n' "$1" > "$MOCK_DIR/stat"
+    chmod +x "$MOCK_DIR/stat"
+}
+unmock_stat() { rm -f "$MOCK_DIR/stat"; }
+
+test_dstart_linux_mounts_socket_and_labels() {
+    mock_reset
+    mock_uname Linux
+    mock_stat_gid 999
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    run_cage dstart >/dev/null 2>&1 || true
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-v /var/run/docker.sock:/var/run/docker.sock" "socket mounted"
+    assert_contains "$calls" "cage.docker=host" "mode label set"
+    assert_contains "$calls" "--group-add 999" "socket gid group added"
+    unmock_stat
+    unmock_uname
+}
+
+test_dstart_linux_prints_warning_banner() {
+    mock_reset
+    mock_uname Linux
+    mock_stat_gid 999
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    local out; out="$(run_cage dstart 2>&1)"
+    assert_contains "$out" "DOCKER-ENABLED CAGE" "warning banner shown"
+    assert_contains "$out" "root-equivalent" "banner explains exposure"
+    unmock_stat
+    unmock_uname
+}
+
+test_dstart_passes_port_and_volume_flags() {
+    mock_reset
+    mock_uname Linux
+    mock_stat_gid 999
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    run_cage dstart -p 3000:3000 -v /data:/data >/dev/null 2>&1 || true
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-p 3000:3000" "port flag forwarded"
+    assert_contains "$calls" "-v /data:/data" "volume flag forwarded"
+    unmock_stat
+    unmock_uname
+}
+
+test_dstart_no_group_add_when_gid_unknown() {
+    mock_reset
+    mock_uname Linux
+    # No stat mock on Linux CI would find the real socket; force failure.
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$MOCK_DIR/stat"
+    chmod +x "$MOCK_DIR/stat"
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    run_cage dstart >/dev/null 2>&1 || true
+    assert_not_contains "$(mock_calls)" "--group-add" "no group-add when gid unknown"
+    assert_contains "$(mock_calls)" "cage.docker=host" "container still created"
+    unmock_stat
+    unmock_uname
+}
+
+test_start_does_not_mount_docker_socket() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    run_cage start >/dev/null 2>&1 || true
+    local calls; calls="$(mock_calls)"
+    assert_not_contains "$calls" "/var/run/docker.sock" "plain start never mounts docker socket"
+    assert_not_contains "$calls" "cage.docker" "plain start never sets docker label"
+}
+
+# ================================================================
 # Run all tests
 # ================================================================
 
@@ -1569,6 +1670,14 @@ main() {
     run_test test_start_passes_host_uid_gid
     run_test test_reattach_does_not_pass_host_uid_gid
     run_test test_reattach_does_not_use_env_files
+
+    echo ""
+    echo "--- cmd_dstart (Linux trusted mode) ---"
+    run_test test_dstart_linux_mounts_socket_and_labels
+    run_test test_dstart_linux_prints_warning_banner
+    run_test test_dstart_passes_port_and_volume_flags
+    run_test test_dstart_no_group_add_when_gid_unknown
+    run_test test_start_does_not_mount_docker_socket
 
     print_summary
 }
