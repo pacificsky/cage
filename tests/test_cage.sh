@@ -945,10 +945,12 @@ test_restart_existing_container() {
     mock_docker_response "info" 0 ""
     # First inspect: container exists (running)
     mock_docker_response_n "inspect" 1 0 "true"
+    # Second inspect: preserve_docker_mode label read → empty (plain cage)
+    mock_docker_response_n "inspect" 2 0 ""
     # docker rm -f succeeds
     mock_docker_response "rm" 0 ""
-    # Second inspect in cmd_enter: container gone → create new
-    mock_docker_response_n "inspect" 2 1 ""
+    # Third inspect in cmd_enter: container gone → create new
+    mock_docker_response_n "inspect" 3 1 ""
     mock_docker_response "pull" 0 ""
     mock_docker_response "create" 0 ""
     mock_docker_response "start" 0 ""
@@ -965,6 +967,68 @@ test_restart_no_container() {
     out="$(run_cage restart 2>&1)" || rc=$?
     assert_eq "1" "$rc" "exit code"
     assert_contains "$out" "No container" "error message"
+}
+
+test_restart_preserves_docker_mode() {
+    mock_reset
+    mock_uname Linux
+    mock_stat_gid 999
+    mock_docker_response "info" 0 ""
+    mock_docker_response_n "inspect" 1 0 "true"   # state: exists
+    mock_docker_response_n "inspect" 2 0 "host"   # cage.docker label
+    mock_docker_response "rm" 0 ""
+    mock_docker_response_n "inspect" 3 1 ""       # after rm: none → create
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    local out; out="$(run_cage restart 2>&1)"
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "cage.docker=host" "recreated docker-enabled"
+    assert_contains "$calls" "-v /var/run/docker.sock:/var/run/docker.sock" "socket re-mounted"
+    assert_contains "$out" "DOCKER-ENABLED CAGE" "banner on host-mode recreate"
+    unmock_stat
+    unmock_uname
+}
+
+test_restart_plain_container_stays_plain() {
+    mock_reset
+    mock_uname Linux
+    mock_docker_response "info" 0 ""
+    mock_docker_response_n "inspect" 1 0 "true"
+    mock_docker_response_n "inspect" 2 0 ""       # no label
+    mock_docker_response "rm" 0 ""
+    mock_docker_response_n "inspect" 3 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    run_cage restart >/dev/null 2>&1 || true
+    # Check for the label assignment "cage.docker=" rather than the bare
+    # substring: preserve_docker_mode reads the label via `docker inspect -f
+    # '{{index .Config.Labels "cage.docker"}}'`, whose format string contains
+    # "cage.docker" and is recorded in mock_calls.  Only a create with a docker
+    # label writes "cage.docker=<mode>", which is what "stays plain" must avoid.
+    assert_not_contains "$(mock_calls)" "cage.docker=" "no docker args for plain cage"
+    unmock_uname
+}
+
+test_upgrade_preserves_docker_mode() {
+    mock_reset
+    mock_uname Linux
+    mock_stat_gid 999
+    mock_docker_response "info" 0 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response_n "inspect" 1 0 "true"        # state
+    mock_docker_response_n "inspect" 2 0 "sha256:old"  # container image id
+    mock_docker_response "image" 0 "sha256:new"        # newer available
+    mock_docker_response_n "inspect" 3 0 "host"        # label
+    mock_docker_response "rm" 0 ""
+    mock_docker_response_n "inspect" 4 1 ""            # gone → create
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    run_cage upgrade >/dev/null 2>&1 || true
+    assert_contains "$(mock_calls)" "cage.docker=host" "upgrade keeps docker mode"
+    unmock_stat
+    unmock_uname
 }
 
 # ================================================================
@@ -1013,9 +1077,11 @@ test_upgrade_pulls_and_recreates_when_newer() {
     # image inspect returns different ID → newer available
     mock_docker_response_n "inspect" 2 0 "sha256:old"
     mock_docker_response "image" 0 "sha256:new"
+    # preserve_docker_mode label read → empty (plain cage)
+    mock_docker_response_n "inspect" 3 0 ""
     mock_docker_response "rm" 0 ""
     # After rm, cmd_enter inspect: container gone → create new
-    mock_docker_response_n "inspect" 3 1 ""
+    mock_docker_response_n "inspect" 4 1 ""
     mock_docker_response "create" 0 ""
     mock_docker_response "start" 0 ""
     local out; out="$(run_cage upgrade 2>&1)"
@@ -2027,6 +2093,9 @@ main() {
     echo "--- cmd_restart ---"
     run_test test_restart_existing_container
     run_test test_restart_no_container
+    run_test test_restart_preserves_docker_mode
+    run_test test_restart_plain_container_stays_plain
+    run_test test_upgrade_preserves_docker_mode
 
     echo ""
     echo "--- cmd_update ---"

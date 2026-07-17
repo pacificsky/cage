@@ -117,6 +117,19 @@ route_to_container() {
     return 0
 }
 
+# Recreation flows (restart, upgrade) must keep a docker-enabled cage
+# docker-enabled: restore CAGE_DOCKER_MODE from the container's label
+# before the old container is removed.
+preserve_docker_mode() {
+    local name="$1"
+    local mode
+    mode="$(container_docker_mode "$name")"
+    [ -n "$mode" ] || return 0
+    CAGE_DOCKER_MODE="$mode"
+    [ "$mode" = "host" ] && cage_banner_docker_warning
+    return 0
+}
+
 # Real body arrives in Task 9 (image docker-CLI presence warning).
 check_docker_cli_in_image() { :; }
 
@@ -609,6 +622,7 @@ cmd_restart() {
     local project_dir="$1"
     local name
     name="$(container_name "$project_dir")"
+    route_to_container "$name"
     local state
     state="$(container_state "$name")"
 
@@ -616,6 +630,7 @@ cmd_restart() {
         die "No container for $project_dir. Use 'cage start' to create one."
     fi
 
+    preserve_docker_mode "$name"
     $DOCKER rm -f "$name" >/dev/null 2>&1 || true
     cmd_enter "$project_dir"
 }
@@ -633,10 +648,12 @@ cmd_upgrade() {
     cmd_update
     local name
     name="$(container_name "$project_dir")"
+    route_to_container "$name"
     local state
     state="$(container_state "$name")"
     if [ "$state" != "none" ]; then
         if image_newer_available "$name"; then
+            preserve_docker_mode "$name"
             info "Removing old container $name"
             $DOCKER rm -f "$name" >/dev/null 2>&1 || true
             info "Starting fresh container with new image"
