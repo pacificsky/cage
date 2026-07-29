@@ -69,7 +69,7 @@ Both files use Docker env-file format: `KEY=VALUE` lines, `#` comments, blank li
 ### Testing
 
 - **Unit tests** (`tests/test_cage.sh`): Mock-based, no container runtime needed. Fast CI gate on every push.
-- **Integration tests** (`tests/test_integration.sh`): Run against a real container runtime (Docker or Podman). Uses `ubuntu:24.04` as a lightweight test image. Triggered on every pull request, push to main (when `cage.sh`, `tests/`, or the workflow change), and manual dispatch. Refuse to run on macOS (they execute `obliterate`).
+- **Integration tests** (`tests/test_integration.sh`): Run against a real container runtime (Docker or Podman). Uses `ubuntu:24.04` as a lightweight test image. The workflow fires on every pull request, but the test job only runs when `cage.sh`, `tests/**`, or the workflow file changed (otherwise skipped, and the gate passes as skipped); also runs on path-filtered pushes to main and manual dispatch. Refuse to run on macOS (they execute `obliterate`).
 
 ### Docker-Enabled Cages
 
