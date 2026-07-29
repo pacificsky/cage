@@ -184,6 +184,57 @@ Because cage mounts your project at the same absolute path everywhere (and
 colima preserves host paths in the VM), compose files with relative bind
 mounts (`./src:/app/src`) work unchanged.
 
+### Worked example
+
+Say `~/src/todo-app` is a typical two-service project:
+
+```yaml
+# ~/src/todo-app/docker-compose.yml
+services:
+  api:
+    build: .
+    volumes:
+      - ./src:/app/src        # relative bind mount — works unchanged in the cage
+    ports:
+      - "8000:8000"
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: dev
+```
+
+On the host:
+
+```bash
+cd ~/src/todo-app
+cage dstart        # macOS: first run provisions the cage VM (takes ~1 min)
+```
+
+Inside the cage, the agent can drive the whole stack:
+
+```bash
+docker compose up -d --build       # build and start api + db
+docker compose logs -f api         # watch service logs
+
+# Join the compose network, then reach services by name:
+docker network connect todo-app_default "$(hostname)"
+curl http://api:8000/health
+
+docker compose exec db psql -U postgres    # exec into a service
+
+# After editing code (the project dir is the same path as on the host):
+docker compose up -d --build api
+```
+
+From your browser, `http://localhost:8000` works too: on Linux the published
+port binds on the host; on macOS colima forwards it to your Mac. Note that
+*inside* the cage, published ports are not on `localhost` (the cage is a
+sibling container, not the docker host) — use the service name over the
+compose network as shown above.
+
+When you're done: `docker compose down` inside the cage stops the stack;
+`cage rm` removes only the agent container.
+
 Notes:
 
 - Docker-enablement is a creation-time property. `cage status` shows it
