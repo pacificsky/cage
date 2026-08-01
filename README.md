@@ -249,9 +249,12 @@ Notes:
 - macOS: the cage VM's daemon has its own `cage-home` volume, so your first
   dstart needs a one-time re-login to Claude (the seed directory applies as
   usual).
-- VM sizing: `CAGE_VM_CPU` (default 4) and `CAGE_VM_MEMORY` (default 8 GiB),
-  set in the environment or `~/.config/cage/env`. Changing `CAGE_SRC_ROOT`
-  after the VM exists requires `colima delete --profile cage`.
+- VM sizing: `CAGE_VM_CPU` (default 4), `CAGE_VM_MEMORY` (default 8 GiB), and
+  `CAGE_VM_DISK` (default 60 GiB), set in the environment or
+  `~/.config/cage/env`. They apply when the VM is first provisioned; to change
+  them later, `colima stop --profile cage` and re-run `cage dstart` with the
+  new values (disk can only grow). Changing `CAGE_SRC_ROOT` after the VM
+  exists requires `colima delete --profile cage`.
 
 ## Run from Source
 

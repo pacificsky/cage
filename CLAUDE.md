@@ -51,7 +51,8 @@ Deterministic: `cage-<dirname>-<8char-sha256-of-absolute-path>`. Example: `/User
 - `CAGE_SRC_ROOT` — source root mounted into the macOS cage VM (default: `~/src`)
 - `CAGE_VM_CPU` — CPUs for the macOS cage VM (default: `4`)
 - `CAGE_VM_MEMORY` — memory in GiB for the macOS cage VM (default: `8`)
-  (all three also read from `~/.config/cage/env` via `cage_config_get`)
+- `CAGE_VM_DISK` — disk in GiB for the macOS cage VM (default: `60`)
+  (all of the above also read from `~/.config/cage/env` via `cage_config_get`)
 
 ### Seed Directory
 

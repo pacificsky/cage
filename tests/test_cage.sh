@@ -1918,7 +1918,7 @@ test_dstart_macos_provisions_vm_first_run() {
     mock_colima_response "status" 1 ""        # VM not running
     mock_colima_response "ssh" 0 "998"        # socket gid inside the VM
     local out; out="$(run_dstart_macos)" || true
-    assert_contains "$(colima_calls)" "start --profile cage --mount $HOME/src:w --ssh-agent --cpu 4 --memory 8" "provision command"
+    assert_contains "$(colima_calls)" "start --profile cage --mount $HOME/src:w --ssh-agent --cpu 4 --memory 8 --disk 60" "provision command"
     assert_contains "$(colima_calls)" "--activate=false" "does not hijack the user's docker context"
     assert_contains "$out" "cage VM" "explains the one-time provision"
     local calls; calls="$(mock_calls)"
@@ -1943,9 +1943,9 @@ test_dstart_macos_vm_size_configurable() {
     mock_colima_response "status" 1 ""
     mock_colima_response "ssh" 0 "998"
     mkdir -p "$HOME/.config/cage"
-    printf 'CAGE_VM_CPU=8\nCAGE_VM_MEMORY=16\n' > "$HOME/.config/cage/env"
+    printf 'CAGE_VM_CPU=8\nCAGE_VM_MEMORY=16\nCAGE_VM_DISK=100\n' > "$HOME/.config/cage/env"
     run_dstart_macos >/dev/null || true
-    assert_contains "$(colima_calls)" "--cpu 8 --memory 16" "VM size from config file"
+    assert_contains "$(colima_calls)" "--cpu 8 --memory 16 --disk 100" "VM size from config file"
     rm -f "$HOME/.config/cage/env"
     teardown_dstart_macos
 }

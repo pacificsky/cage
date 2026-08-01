@@ -362,17 +362,20 @@ setup_colima_cage() {
     esac
 
     if ! colima status --profile "$COLIMA_PROFILE" >/dev/null 2>&1; then
-        local cpu memory
+        local cpu memory disk
         cpu="$(cage_config_get CAGE_VM_CPU)"
         cpu="${cpu:-4}"
         memory="$(cage_config_get CAGE_VM_MEMORY)"
         memory="${memory:-8}"
+        disk="$(cage_config_get CAGE_VM_DISK)"
+        disk="${disk:-60}"
         info "Starting the cage VM (first run provisions it — takes about a minute)..."
         colima start --profile "$COLIMA_PROFILE" \
             --mount "${src_root}:w" \
             --ssh-agent \
             --cpu "$cpu" \
             --memory "$memory" \
+            --disk "$disk" \
             --activate=false \
             || die "colima failed to start the cage VM. If the profile is corrupt, try: colima delete --profile $COLIMA_PROFILE"
     fi
@@ -744,7 +747,8 @@ Environment:
   CAGE_SRC_ROOT   Source root mounted into the macOS cage VM (default: ~/src)
   CAGE_VM_CPU     CPUs for the macOS cage VM (default: 4)
   CAGE_VM_MEMORY  Memory in GiB for the macOS cage VM (default: 8)
-                  (all three also read from ~/.config/cage/env)
+  CAGE_VM_DISK    Disk in GiB for the macOS cage VM (default: 60)
+                  (all of the above also read from ~/.config/cage/env)
 
 Seed directory:
   ~/.config/cage/home/    Files copied (no-clobber) into /home/vscode/ on new containers
