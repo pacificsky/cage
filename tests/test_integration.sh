@@ -445,6 +445,99 @@ test_obliterate_removes_all() {
 }
 
 # ================================================================
+# Tests: dstart (docker-enabled cages, Linux trusted mode)
+# ================================================================
+
+test_dstart_mounts_socket_and_labels() {
+    local pdir; pdir="$(make_project_dir)"
+    local name; name="$(container_name_for "$pdir")"
+
+    local out; out="$(start_cage_in "$pdir" dstart)"
+    assert_contains "$out" "DOCKER-ENABLED CAGE" "warning banner shown"
+
+    local label
+    label="$($DOCKER inspect -f '{{index .Config.Labels "cage.docker"}}' "$name" 2>/dev/null)" || true
+    assert_eq "host" "$label" "cage.docker label"
+
+    $DOCKER start "$name" >/dev/null 2>&1 || true
+    local sock
+    sock="$($DOCKER exec "$name" sh -c 'test -S /var/run/docker.sock && echo yes' 2>/dev/null)" || true
+    assert_eq "yes" "$sock" "socket present inside the cage"
+
+    cleanup_container "$name"
+}
+
+test_dstart_agent_can_reach_daemon() {
+    local pdir; pdir="$(make_project_dir)"
+    local name; name="$(container_name_for "$pdir")"
+
+    # docker:cli ships the docker client; the mounted socket should answer.
+    # Longer timeout: this pulls docker:cli on a cold CI cache.
+    (cd "$pdir" && CAGE_IMAGE="docker:cli" timeout 60 bash "$CAGE_SH" dstart </dev/null 2>&1) || true
+
+    $DOCKER start "$name" >/dev/null 2>&1 || true
+    local out
+    out="$($DOCKER exec "$name" docker ps 2>&1)" || true
+    assert_contains "$out" "CONTAINER ID" "docker ps works against mounted socket"
+
+    cleanup_container "$name"
+}
+
+test_status_shows_docker_mode() {
+    local pdir; pdir="$(make_project_dir)"
+    local name; name="$(container_name_for "$pdir")"
+
+    start_cage_in "$pdir" dstart
+    local out; out="$(run_cage_in "$pdir" status)"
+    assert_contains "$out" "Docker:    host" "status reports host mode"
+
+    cleanup_container "$name"
+}
+
+test_status_shows_docker_none_for_plain_start() {
+    local pdir; pdir="$(make_project_dir)"
+    local name; name="$(container_name_for "$pdir")"
+
+    start_cage_in "$pdir" start
+    local out; out="$(run_cage_in "$pdir" status)"
+    assert_contains "$out" "Docker:    none" "plain cage reports none"
+
+    cleanup_container "$name"
+}
+
+test_start_reattaches_to_dstart_container() {
+    local pdir; pdir="$(make_project_dir)"
+    local name; name="$(container_name_for "$pdir")"
+
+    start_cage_in "$pdir" dstart
+    local id_before
+    id_before="$($DOCKER inspect -f '{{.Id}}' "$name" 2>/dev/null)" || true
+
+    start_cage_in "$pdir" start
+    local id_after
+    id_after="$($DOCKER inspect -f '{{.Id}}' "$name" 2>/dev/null)" || true
+
+    assert_eq "$id_before" "$id_after" "plain start re-attached, did not recreate"
+
+    cleanup_container "$name"
+}
+
+test_restart_preserves_docker_mode() {
+    local pdir; pdir="$(make_project_dir)"
+    local name; name="$(container_name_for "$pdir")"
+
+    start_cage_in "$pdir" dstart
+    $DOCKER stop "$name" >/dev/null 2>&1 || true
+    start_cage_in "$pdir" restart
+
+    local label
+    label="$($DOCKER inspect -f '{{index .Config.Labels "cage.docker"}}' "$name" 2>/dev/null)" || true
+    assert_eq "host" "$label" "recreated container keeps docker mode"
+
+    cleanup_container "$name"
+}
+
+# ================================================================
 # Run all tests
 # ================================================================
 
@@ -481,6 +574,19 @@ main() {
     echo "--- listing and cleanup ---"
     run_test test_list_shows_container
     run_test test_obliterate_removes_all
+
+    echo ""
+    echo "--- dstart (docker-enabled cages) ---"
+    if [ "$DOCKER" = "docker" ]; then
+        run_test test_dstart_mounts_socket_and_labels
+        run_test test_dstart_agent_can_reach_daemon
+        run_test test_status_shows_docker_mode
+        run_test test_status_shows_docker_none_for_plain_start
+        run_test test_start_reattaches_to_dstart_container
+        run_test test_restart_preserves_docker_mode
+    else
+        echo "  (skipped: dstart integration tests require docker runtime)"
+    fi
 
     print_summary
 }

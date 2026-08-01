@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.8.0"
+VERSION="0.9.0"
 IMAGE="${CAGE_IMAGE:-ghcr.io/pacificsky/devcontainer-lite:latest}"
 HOME_VOL="cage-home"
+COLIMA_PROFILE="cage"
+COLIMA_CAGE_SOCK="$HOME/.colima/cage/docker.sock"
+CAGE_DOCKER_MODE=""   # "", "host", or "colima" — set by dstart / preserve_docker_mode
 
 # Detect container runtime: prefer docker, fall back to podman.
 if command -v docker &>/dev/null; then
@@ -45,6 +48,96 @@ drop_into_cage() {
     "$@" || rc=$?
     cage_banner_exit "$name"
     return $rc
+}
+
+cage_banner_docker_warning() {
+    local c="\033[1;31m" r="\033[0m"
+    local line="═══════════════════════════════════════════════════════════════"
+    printf '%b\n' "${c}${line}${r}" >&2
+    printf '%b\n' "${c}  ⚠  DOCKER-ENABLED CAGE (trusted mode)${r}" >&2
+    printf '%b\n' "${c}  ⚠  The agent holds the host docker socket — root-equivalent${r}" >&2
+    printf '%b\n' "${c}  ⚠  access to this machine.${r}" >&2
+    printf '%b\n' "${c}${line}${r}" >&2
+}
+
+# Read KEY from the environment, falling back to ~/.config/cage/env
+# (docker env-file format).  Last occurrence wins, matching --env-file.
+cage_config_get() {
+    local key="$1"
+    local val="${!key:-}"
+    if [ -z "$val" ] && [ -f "$HOME/.config/cage/env" ]; then
+        val="$(grep -E "^${key}=" "$HOME/.config/cage/env" 2>/dev/null | tail -1 | cut -d= -f2-)" || true
+    fi
+    val="${val/#\~/$HOME}"
+    echo "$val"
+}
+
+# Host-side path of the daemon socket to mount into a docker-enabled cage.
+docker_socket_path() {
+    if [ "$CAGE_DOCKER_MODE" = "colima" ]; then
+        # Resolved by the colima-cage daemon, so this path is inside the VM.
+        echo "/var/run/docker.sock"
+    elif [ "$DOCKER" = "podman" ]; then
+        local rootless="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
+        if [ -S "$rootless" ]; then echo "$rootless"; else echo "/run/podman/podman.sock"; fi
+    else
+        echo "/var/run/docker.sock"
+    fi
+}
+
+# Numeric gid owning the daemon socket, so the non-root container user can
+# be added to it with --group-add.  Empty output = unknown (skip group-add).
+docker_socket_gid() {
+    if [ "$CAGE_DOCKER_MODE" = "colima" ]; then
+        colima ssh --profile "$COLIMA_PROFILE" -- stat -c %g /var/run/docker.sock 2>/dev/null | tr -d '[:space:]' || true
+    else
+        stat -c %g "$(docker_socket_path)" 2>/dev/null | tr -d '[:space:]' || true
+    fi
+}
+
+# The cage.docker label of an existing container: "host", "colima", or "".
+container_docker_mode() {
+    local mode
+    mode="$($DOCKER inspect -f '{{index .Config.Labels "cage.docker"}}' "$1" 2>/dev/null)" || mode=""
+    [ "$mode" = "<no value>" ] && mode=""
+    echo "$mode"
+}
+
+# On macOS a project's container may live in the cage colima VM rather than
+# the default daemon.  If it isn't found locally, retarget this invocation.
+route_to_container() {
+    local name="$1"
+    [[ "$(uname -s)" == "Darwin" ]] || return 0
+    [ -n "${DOCKER_HOST:-}" ] && return 0          # already targeted
+    [ -S "$COLIMA_CAGE_SOCK" ] || return 0         # no cage VM → nothing to route to
+    [ "$(container_state "$name")" = "none" ] || return 0
+    if DOCKER_HOST="unix://$COLIMA_CAGE_SOCK" $DOCKER inspect "$name" >/dev/null 2>&1; then
+        export DOCKER_HOST="unix://$COLIMA_CAGE_SOCK"
+    fi
+    return 0
+}
+
+# Recreation flows (restart, upgrade) must keep a docker-enabled cage
+# docker-enabled: restore CAGE_DOCKER_MODE from the container's label
+# before the old container is removed.
+preserve_docker_mode() {
+    local name="$1"
+    local mode
+    mode="$(container_docker_mode "$name")"
+    [ -n "$mode" ] || return 0
+    CAGE_DOCKER_MODE="$mode"
+    [ "$mode" = "host" ] && cage_banner_docker_warning
+    return 0
+}
+
+# Warn (never fail) when the image lacks the docker CLI — compose work
+# inside a docker-enabled cage needs it.  Images without sh also trip
+# this check; the warning is advisory either way.
+check_docker_cli_in_image() {
+    if ! $DOCKER run --rm --entrypoint sh "$IMAGE" -c 'command -v docker' >/dev/null 2>&1; then
+        info "Warning: image $IMAGE has no docker CLI — 'docker' commands inside the cage will fail."
+        info "Use an image that ships the docker CLI and compose plugin."
+    fi
 }
 
 container_name() {
@@ -137,6 +230,8 @@ cmd_enter() {
 
     local name
     name="$(container_name "$project_dir")"
+    route_to_container "$name"
+    ensure_docker
     local state
     state="$(container_state "$name")"
 
@@ -200,6 +295,20 @@ cmd_enter() {
             [[ -f "$global_env" ]] && env_file_args+=(--env-file "$global_env")
             [[ -f "$project_env" ]] && env_file_args+=(--env-file "$project_env")
 
+            # Docker-enabled cage: mount the daemon socket and record the mode.
+            local -a docker_args=()
+            if [ -n "$CAGE_DOCKER_MODE" ]; then
+                local sock gid
+                sock="$(docker_socket_path)"
+                docker_args=(
+                    -v "${sock}:/var/run/docker.sock"
+                    -l "cage.docker=${CAGE_DOCKER_MODE}"
+                )
+                gid="$(docker_socket_gid)"
+                [ -n "$gid" ] && docker_args+=(--group-add "$gid")
+                check_docker_cli_in_image
+            fi
+
             $DOCKER create -it \
                 --name "$name" \
                 --hostname "$name" \
@@ -208,6 +317,7 @@ cmd_enter() {
                 "${mount_args[@]}" \
                 ${ssh_agent_args[@]+"${ssh_agent_args[@]}"} \
                 ${env_file_args[@]+"${env_file_args[@]}"} \
+                ${docker_args[@]+"${docker_args[@]}"} \
                 -e UV_PROJECT_ENVIRONMENT=.cage-venv \
                 -e HOST_UID="$(id -u)" \
                 -e HOST_GID="$(id -g)" \
@@ -223,10 +333,94 @@ cmd_enter() {
     esac
 }
 
+# macOS contained mode: validate prerequisites and (Task 5) target the
+# dedicated colima 'cage' profile whose VM mounts only CAGE_SRC_ROOT.
+setup_colima_cage() {
+    local project_dir="$1"
+
+    command -v colima &>/dev/null || die "dstart on macOS requires colima (brew install colima).
+       Docker Desktop / OrbStack sockets would hand the agent your file-shared home directory,
+       so cage only supports colima here.  Want another runtime supported?
+       Open an issue: https://github.com/pacificsky/cage/issues"
+
+    [ "$DOCKER" = "docker" ] || die "dstart on macOS requires the docker CLI (colima's docker runtime). Install it: brew install docker"
+
+    local src_root
+    src_root="$(cage_config_get CAGE_SRC_ROOT)"
+    src_root="${src_root:-$HOME/src}"
+    src_root="${src_root%/}"
+
+    case "$project_dir/" in
+        "$src_root"/*) ;;
+        *)
+            local hint=""
+            if [ -d "$HOME/.colima/$COLIMA_PROFILE" ]; then
+                hint=" Note: the cage VM keeps the mounts it was created with — after changing CAGE_SRC_ROOT, run 'colima delete --profile $COLIMA_PROFILE' and dstart again."
+            fi
+            die "project $project_dir is outside CAGE_SRC_ROOT ($src_root), so it can't be mounted into the cage VM. Set CAGE_SRC_ROOT in ~/.config/cage/env or move the project.$hint"
+            ;;
+    esac
+
+    if ! colima status --profile "$COLIMA_PROFILE" >/dev/null 2>&1; then
+        local cpu memory disk
+        cpu="$(cage_config_get CAGE_VM_CPU)"
+        cpu="${cpu:-4}"
+        memory="$(cage_config_get CAGE_VM_MEMORY)"
+        memory="${memory:-8}"
+        disk="$(cage_config_get CAGE_VM_DISK)"
+        disk="${disk:-60}"
+        info "Starting the cage VM (first run provisions it — takes about a minute)..."
+        colima start --profile "$COLIMA_PROFILE" \
+            --mount "${src_root}:w" \
+            --ssh-agent \
+            --cpu "$cpu" \
+            --memory "$memory" \
+            --disk "$disk" \
+            --activate=false \
+            || die "colima failed to start the cage VM. If the profile is corrupt, try: colima delete --profile $COLIMA_PROFILE"
+    fi
+
+    export DOCKER_HOST="unix://$COLIMA_CAGE_SOCK"
+}
+
+cmd_dstart() {
+    local project_dir="$1"
+    shift
+
+    local name
+    name="$(container_name "$project_dir")"
+
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        # A pre-existing non-docker cage lives in the default daemon; a
+        # docker-enabled one would live in the cage VM.  Two containers for
+        # one project is a footgun — refuse and let the user pick.
+        if $DOCKER info >/dev/null 2>&1 \
+            && [ "$(container_state "$name")" != "none" ] \
+            && [ -z "$(container_docker_mode "$name")" ]; then
+            die "this project already has a cage without docker in the default daemon. Run 'cage rm' first, then 'cage dstart'."
+        fi
+        setup_colima_cage "$project_dir"
+        CAGE_DOCKER_MODE="colima"
+    else
+        CAGE_DOCKER_MODE="host"
+        cage_banner_docker_warning
+    fi
+
+    ensure_docker
+
+    if [ "$(container_state "$name")" != "none" ] && [ -z "$(container_docker_mode "$name")" ]; then
+        info "Container already exists without docker — re-attaching. Use 'cage rm' then 'cage dstart' to enable docker."
+    fi
+
+    cmd_enter "$project_dir" "$@"
+}
+
 cmd_stop() {
     local project_dir="$1"
     local name
     name="$(container_name "$project_dir")"
+    route_to_container "$name"
+    ensure_docker
     local state
     state="$(container_state "$name")"
 
@@ -248,6 +442,8 @@ cmd_rm() {
     local project_dir="$1"
     local name
     name="$(container_name "$project_dir")"
+    route_to_container "$name"
+    ensure_docker
     local state
     state="$(container_state "$name")"
 
@@ -266,7 +462,14 @@ cmd_rm() {
     esac
 }
 
-cmd_rmconfig() {
+# True when this invocation should also sweep the cage VM daemon.
+cage_vm_daemon_reachable() {
+    [[ "$(uname -s)" == "Darwin" ]] || return 1
+    [ -z "${DOCKER_HOST:-}" ] || return 1
+    [ -S "$COLIMA_CAGE_SOCK" ]
+}
+
+rmconfig_daemon() {
     local ids
     ids="$($DOCKER ps -a --filter "label=cage.project" -q)" || true
     if [ -n "$ids" ]; then
@@ -285,7 +488,7 @@ cmd_rmconfig() {
     fi
 }
 
-cmd_obliterate() {
+obliterate_daemon() {
     local ids
     ids="$($DOCKER ps -a --filter "label=cage.project" -q)" || true
     if [ -n "$ids" ]; then
@@ -302,10 +505,29 @@ cmd_obliterate() {
     fi
 }
 
+cmd_rmconfig() {
+    rmconfig_daemon
+    if cage_vm_daemon_reachable; then
+        info "Cleaning the cage VM daemon"
+        ( export DOCKER_HOST="unix://$COLIMA_CAGE_SOCK"; rmconfig_daemon )
+    fi
+}
+
+cmd_obliterate() {
+    obliterate_daemon
+    if cage_vm_daemon_reachable; then
+        info "Cleaning the cage VM daemon"
+        ( export DOCKER_HOST="unix://$COLIMA_CAGE_SOCK"; obliterate_daemon )
+        info "To remove the cage VM entirely: colima delete --profile $COLIMA_PROFILE"
+    fi
+}
+
 cmd_status() {
     local project_dir="$1"
     local name
     name="$(container_name "$project_dir")"
+    route_to_container "$name"
+    ensure_docker
     local state
     state="$(container_state "$name")"
 
@@ -313,6 +535,10 @@ cmd_status() {
     echo "State:     $state"
 
     if [ "$state" != "none" ]; then
+        local dmode
+        dmode="$(container_docker_mode "$name")"
+        echo "Docker:    ${dmode:-none}"
+
         local ports
         ports="$($DOCKER port "$name" 2>/dev/null)" || true
         if [ -n "$ports" ]; then
@@ -324,13 +550,16 @@ cmd_status() {
     fi
 }
 
-cmd_list() {
+list_daemon_containers() {
+    local show_header="$1"
     # Docker uses .Label "key"; Podman uses index .Labels "key".
     local label_tpl='{{.Label "cage.project"}}'
     [ "$DOCKER" = "podman" ] && label_tpl='{{index .Labels "cage.project"}}'
 
     local fmt="%-35s %-25s %-32s %s\n"
-    printf "$fmt" "NAMES" "STATUS" "IMAGE" "PROJECT"
+    if [ "$show_header" = "with_header" ]; then
+        printf "$fmt" "NAMES" "STATUS" "IMAGE" "PROJECT"
+    fi
 
     # Collect container rows from docker ps.
     local -a names=() statuses=() projects=() images=()
@@ -418,10 +647,19 @@ cmd_list() {
     done
 }
 
+cmd_list() {
+    list_daemon_containers with_header
+    if cage_vm_daemon_reachable; then
+        ( export DOCKER_HOST="unix://$COLIMA_CAGE_SOCK"; list_daemon_containers no_header )
+    fi
+}
+
 cmd_shell() {
     local project_dir="$1"
     local name
     name="$(container_name "$project_dir")"
+    route_to_container "$name"
+    ensure_docker
     local state
     state="$(container_state "$name")"
 
@@ -434,6 +672,8 @@ cmd_restart() {
     local project_dir="$1"
     local name
     name="$(container_name "$project_dir")"
+    route_to_container "$name"
+    ensure_docker
     local state
     state="$(container_state "$name")"
 
@@ -441,6 +681,7 @@ cmd_restart() {
         die "No container for $project_dir. Use 'cage start' to create one."
     fi
 
+    preserve_docker_mode "$name"
     $DOCKER rm -f "$name" >/dev/null 2>&1 || true
     cmd_enter "$project_dir"
 }
@@ -458,10 +699,12 @@ cmd_upgrade() {
     cmd_update
     local name
     name="$(container_name "$project_dir")"
+    route_to_container "$name"
     local state
     state="$(container_state "$name")"
     if [ "$state" != "none" ]; then
         if image_newer_available "$name"; then
+            preserve_docker_mode "$name"
             info "Removing old container $name"
             $DOCKER rm -f "$name" >/dev/null 2>&1 || true
             info "Starting fresh container with new image"
@@ -481,6 +724,12 @@ Usage: cage.sh <command> [options]
 Commands:
   start [-p hostPort:containerPort]... [-v hostPath:containerPath]...
             Create new container or re-attach to existing one for CWD
+  dstart [-p ...] [-v ...]
+            Like start, but docker-enabled: the agent gets a docker socket
+            and can run docker/compose for multi-service projects.
+            Linux: mounts the host socket (trusted — see warning banner).
+            macOS: uses a dedicated colima VM 'cage' that mounts only
+            CAGE_SRC_ROOT (contained — requires colima).
   stop      Stop container for CWD project
   rm        Stop and remove container for CWD project
   status    Show container name, state, and port mappings
@@ -494,7 +743,12 @@ Commands:
   help      Show this help
 
 Environment:
-  CAGE_IMAGE    Override container image (default: ghcr.io/pacificsky/devcontainer-lite:latest)
+  CAGE_IMAGE      Override container image (default: ghcr.io/pacificsky/devcontainer-lite:latest)
+  CAGE_SRC_ROOT   Source root mounted into the macOS cage VM (default: ~/src)
+  CAGE_VM_CPU     CPUs for the macOS cage VM (default: 4)
+  CAGE_VM_MEMORY  Memory in GiB for the macOS cage VM (default: 8)
+  CAGE_VM_DISK    Disk in GiB for the macOS cage VM (default: 60)
+                  (all of the above also read from ~/.config/cage/env)
 
 Seed directory:
   ~/.config/cage/home/    Files copied (no-clobber) into /home/vscode/ on new containers
@@ -524,8 +778,8 @@ main() {
                 cmd_help ;;
         -V|--version|version)
                 echo "cage $VERSION" ;;
-        start)
-            # Parse -p and -v flags after start subcommand
+        start|dstart)
+            # Parse -p and -v flags after the subcommand
             local -a port_flags=() vol_flags=()
             while [ $# -gt 0 ]; do
                 case "$1" in
@@ -539,18 +793,21 @@ main() {
                         vol_flags+=(-v "$2")
                         shift 2
                         ;;
-                    *)  die "Unknown flag for start: $1" ;;
+                    *)  die "Unknown flag for ${cmd}: $1" ;;
                 esac
             done
-            ensure_docker
-            cmd_enter "$project_dir" ${port_flags[@]+"${port_flags[@]}"} ${vol_flags[@]+"${vol_flags[@]}"}
+            if [ "$cmd" = "dstart" ]; then
+                cmd_dstart "$project_dir" ${port_flags[@]+"${port_flags[@]}"} ${vol_flags[@]+"${vol_flags[@]}"}
+            else
+                cmd_enter "$project_dir" ${port_flags[@]+"${port_flags[@]}"} ${vol_flags[@]+"${vol_flags[@]}"}
+            fi
             ;;
-        stop)   ensure_docker; cmd_stop "$project_dir" ;;
-        rm)     ensure_docker; cmd_rm "$project_dir" ;;
-        status) ensure_docker; cmd_status "$project_dir" ;;
+        stop)   cmd_stop "$project_dir" ;;
+        rm)     cmd_rm "$project_dir" ;;
+        status) cmd_status "$project_dir" ;;
         list)   ensure_docker; cmd_list ;;
-        shell)  ensure_docker; cmd_shell "$project_dir" ;;
-        restart) ensure_docker; cmd_restart "$project_dir" ;;
+        shell)  cmd_shell "$project_dir" ;;
+        restart) cmd_restart "$project_dir" ;;
         obliterate) ensure_docker; cmd_obliterate ;;
         rmconfig) ensure_docker; cmd_rmconfig ;;
         update) ensure_docker; cmd_update ;;
