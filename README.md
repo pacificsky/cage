@@ -74,6 +74,9 @@ cage start -p 3000:3000
 # Multiple ports
 cage start -p 3000:3000 -p 5432:5432
 
+# Mount an extra host directory into the container
+cage start -v ~/datasets:/datasets
+
 # Open a second shell while an agent is running
 cage shell
 
@@ -98,6 +101,22 @@ cage restart
 | SSH agent socket | `/run/host-services/ssh-auth.sock` (macOS) or `/tmp/ssh-agent.sock` (Linux) | SSH agent forwarding |
 
 On macOS, cage uses Docker Desktop's / Colima's SSH agent proxy. On Linux, it bind-mounts `$SSH_AUTH_SOCK` directly. `SSH_AUTH_SOCK` is set inside the container to match.
+
+#### Extra mounts
+
+`cage start` and `cage dstart` accept `-v`, with the same syntax as `docker run`:
+
+```bash
+# Mount a host directory at the same absolute path
+cage start -v ~/datasets:/Users/me/datasets
+
+# Read-only, and mixed with -p — both flags are repeatable
+cage start -v ~/models:/models:ro -p 3000:3000
+```
+
+Mounting a host path at the *same* absolute path is worth doing where you can. It's why the project directory is mounted that way: paths in error messages, stack traces, and tool output stay valid on both sides.
+
+`-v` only takes effect when a container is created. If one already exists, cage warns and ignores the flag — use `cage rm && cage start -v ...` to apply it. Note that `cage restart` and `cage upgrade` recreate the container *without* your original flags, so mounts you want to keep around belong in a [mount file](#mount-files) instead.
 
 ### Injected Environment Variables
 
@@ -154,6 +173,30 @@ DATABASE_URL=postgres://localhost/mydb
 ```
 
 Env files are read at container creation time. After changes: `cage rm && cage start`.
+
+### Mount Files
+
+Declare extra mounts once instead of passing `-v` on every `cage start` or `cage dstart`:
+
+| File | Scope | Description |
+|------|-------|-------------|
+| `~/.config/cage/mounts` | Global | Applied to all cage containers |
+| `.cage.mounts` | Per-project | Applied to the current project's container |
+
+One `docker -v` spec per line. Blank lines and lines starting with `#` are ignored, a leading `~/` expands to your home directory, and a line with no `:` is mounted at the same absolute path inside the container.
+
+```bash
+# ~/.config/cage/mounts
+~/datasets
+~/.aws:/home/vscode/.aws:ro
+
+# ~/src/my-project/.cage.mounts
+/Volumes/scratch:/scratch
+```
+
+When two mounts share the same container-side path, the more specific one wins: `-v` on the command line beats `.cage.mounts`, which beats the global file. That makes it possible to point a project at a different source for a path the global file already claims.
+
+Mount files are read at container creation time. After changes: `cage rm && cage start`. Unlike `-v` flags, they are re-read on every creation, so mounts declared this way survive `cage restart` and `cage upgrade`.
 
 ### Seed Directory
 

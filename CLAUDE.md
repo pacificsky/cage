@@ -67,10 +67,21 @@ cage injects environment variables from env files into containers at creation ti
 
 Both files use Docker env-file format: `KEY=VALUE` lines, `#` comments, blank lines. Per-project values override global for duplicate keys. Both are optional and silently skipped if absent. Only read at container creation; changes require `cage rm && cage start`.
 
+### Mount Files
+
+cage adds extra bind mounts declared in mount files at container creation time, as `-v` flags on `docker create`.
+
+- Global: `~/.config/cage/mounts` — applied to all cage containers
+- Per-project: `.cage.mounts` in the project directory — applied to that project's container only
+
+One `docker -v` spec per line. Blank lines and lines starting with `#` are ignored; leading `~/` expands to `$HOME`; a line with no `:` is expanded to `path:path` (same absolute path in the container). Everything else is passed to Docker verbatim, so `:ro` and named volumes work.
+
+Precedence when two mounts share a container-side target: command-line `-v` > `.cage.mounts` > global file. `build_mount_args` resolves this by walking the collected specs back to front and skipping targets already claimed. Unlike `-v` flags, mount files are re-read on every container creation, so they survive `restart` and `upgrade`.
+
 ### Testing
 
 - **Unit tests** (`tests/test_cage.sh`): Mock-based, no container runtime needed. Fast CI gate on every push.
-- **Integration tests** (`tests/test_integration.sh`): Run against a real container runtime (Docker or Podman). Uses `ubuntu:24.04` as a lightweight test image. The workflow fires on every pull request, but the test job only runs when `cage.sh`, `tests/**`, or the workflow file changed (otherwise skipped, and the gate passes as skipped); also runs on path-filtered pushes to main and manual dispatch. Refuse to run on macOS (they execute `obliterate`).
+- **Integration tests** (`tests/test_integration.sh`): Run against a real container runtime, in a CI matrix over **both** Docker and Podman — so avoid Docker-specific `inspect` templates in these tests. Uses `ubuntu:24.04` as a lightweight test image. The workflow fires on every pull request, but the test job only runs when `cage.sh`, `tests/**`, or the workflow file changed (otherwise skipped, and the gate passes as skipped); also runs on path-filtered pushes to main and manual dispatch. Refuse to run on macOS (they execute `obliterate`).
 
 ### Docker-Enabled Cages
 

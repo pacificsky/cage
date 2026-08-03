@@ -378,6 +378,120 @@ test_env_file_override() {
     rm -f "$HOME/.config/cage/env" "$pdir/.cage.env"
 }
 
+test_mounts_file_project() {
+    local pdir; pdir="$(make_project_dir)"
+    local name; name="$(container_name_for "$pdir")"
+    local host_dir; host_dir="$(make_project_dir)"
+
+    echo "from host" > "$host_dir/data.txt"
+    echo "${host_dir}:/mnt/extra" > "$pdir/.cage.mounts"
+
+    start_cage_in "$pdir" start
+
+    $DOCKER start "$name" >/dev/null 2>&1 || true
+    local content
+    content="$($DOCKER exec "$name" cat /mnt/extra/data.txt 2>/dev/null)" || true
+    assert_eq "from host" "$content" "project mount visible in container"
+
+    cleanup_container "$name"
+    rm -f "$pdir/.cage.mounts"
+}
+
+test_mounts_file_global() {
+    local pdir; pdir="$(make_project_dir)"
+    local name; name="$(container_name_for "$pdir")"
+    local host_dir; host_dir="$(make_project_dir)"
+
+    echo "from global" > "$host_dir/data.txt"
+    mkdir -p "$HOME/.config/cage"
+    echo "${host_dir}:/mnt/global" > "$HOME/.config/cage/mounts"
+
+    start_cage_in "$pdir" start
+
+    $DOCKER start "$name" >/dev/null 2>&1 || true
+    local content
+    content="$($DOCKER exec "$name" cat /mnt/global/data.txt 2>/dev/null)" || true
+    assert_eq "from global" "$content" "global mount visible in container"
+
+    cleanup_container "$name"
+    rm -f "$HOME/.config/cage/mounts"
+}
+
+test_mounts_file_same_path_shorthand() {
+    local pdir; pdir="$(make_project_dir)"
+    local name; name="$(container_name_for "$pdir")"
+    local host_dir; host_dir="$(make_project_dir)"
+
+    echo "same path" > "$host_dir/data.txt"
+    echo "$host_dir" > "$pdir/.cage.mounts"
+
+    start_cage_in "$pdir" start
+
+    $DOCKER start "$name" >/dev/null 2>&1 || true
+    local content
+    content="$($DOCKER exec "$name" cat "$host_dir/data.txt" 2>/dev/null)" || true
+    assert_eq "same path" "$content" "colon-less spec mounted at the same absolute path"
+
+    cleanup_container "$name"
+    rm -f "$pdir/.cage.mounts"
+}
+
+test_mounts_file_override() {
+    local pdir; pdir="$(make_project_dir)"
+    local name; name="$(container_name_for "$pdir")"
+    local global_dir; global_dir="$(make_project_dir)"
+    local project_dir; project_dir="$(make_project_dir)"
+
+    echo "global" > "$global_dir/data.txt"
+    echo "project" > "$project_dir/data.txt"
+    mkdir -p "$HOME/.config/cage"
+    echo "${global_dir}:/mnt/shared" > "$HOME/.config/cage/mounts"
+    echo "${project_dir}:/mnt/shared" > "$pdir/.cage.mounts"
+
+    start_cage_in "$pdir" start
+
+    $DOCKER start "$name" >/dev/null 2>&1 || true
+    local content
+    content="$($DOCKER exec "$name" cat /mnt/shared/data.txt 2>/dev/null)" || true
+    assert_eq "project" "$content" "project mount overrides global for same target"
+
+    cleanup_container "$name"
+    rm -f "$HOME/.config/cage/mounts" "$pdir/.cage.mounts"
+}
+
+test_mounts_file_readonly() {
+    local pdir; pdir="$(make_project_dir)"
+    local name; name="$(container_name_for "$pdir")"
+    local host_dir; host_dir="$(make_project_dir)"
+
+    echo "locked" > "$host_dir/data.txt"
+    # The same host dir mounted twice — once writable, once read-only — so
+    # ownership and permissions are identical either way.  A write that
+    # succeeds on /mnt/rw but fails on /mnt/ro isolates ':ro' as the cause;
+    # checking only the failure could pass for unrelated reasons.  Two specs
+    # in one file also covers multi-line mount files.
+    printf '%s:/mnt/rw\n%s:/mnt/ro:ro\n' "$host_dir" "$host_dir" > "$pdir/.cage.mounts"
+
+    start_cage_in "$pdir" start
+
+    $DOCKER start "$name" >/dev/null 2>&1 || true
+    local rw_rc=0 ro_rc=0
+    $DOCKER exec "$name" sh -c 'echo probe > /mnt/rw/probe.txt' >/dev/null 2>&1 || rw_rc=$?
+    $DOCKER exec "$name" sh -c 'echo probe > /mnt/ro/probe.txt' >/dev/null 2>&1 || ro_rc=$?
+
+    assert_eq "0" "$rw_rc" "plain mount accepts writes"
+    if [ "$ro_rc" -eq 0 ]; then
+        fail ":ro mount should reject writes"
+    fi
+
+    local content
+    content="$($DOCKER exec "$name" cat /mnt/ro/data.txt 2>/dev/null)" || true
+    assert_eq "locked" "$content" ":ro mount is still readable"
+
+    cleanup_container "$name"
+    rm -f "$pdir/.cage.mounts"
+}
+
 test_list_shows_container() {
     local pdir; pdir="$(make_project_dir)"
     local name; name="$(container_name_for "$pdir")"
@@ -569,6 +683,14 @@ main() {
     run_test test_env_file_project
     run_test test_env_file_global
     run_test test_env_file_override
+
+    echo ""
+    echo "--- mount file ---"
+    run_test test_mounts_file_project
+    run_test test_mounts_file_global
+    run_test test_mounts_file_same_path_shorthand
+    run_test test_mounts_file_override
+    run_test test_mounts_file_readonly
 
     echo ""
     echo "--- listing and cleanup ---"
