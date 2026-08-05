@@ -2248,6 +2248,40 @@ test_start_mounts_file_ro_option_target_matching() {
     rm -rf "$project_dir"
 }
 
+test_dstart_applies_mounts_file() {
+    local project_dir; project_dir="$(setup_mount_test)"
+    mock_uname Linux
+    mock_stat_gid 999
+    echo "/models:/models" > "$project_dir/.cage.mounts"
+
+    (cd "$project_dir" && run_cage dstart >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    # dstart delegates to cmd_enter, so mount files apply there too — this
+    # pins that delegation, which is the only reason it works.
+    assert_contains "$calls" "-v /models:/models" "mount file applied by dstart"
+    assert_contains "$calls" "cage.docker=host" "still a docker-enabled cage"
+
+    unmock_stat
+    unmock_uname
+    rm -rf "$project_dir"
+}
+
+test_dstart_cli_volume_overrides_mounts_file() {
+    local project_dir; project_dir="$(setup_mount_test)"
+    mock_uname Linux
+    mock_stat_gid 999
+    echo "/file/data:/data" > "$project_dir/.cage.mounts"
+
+    (cd "$project_dir" && run_cage dstart -v /cli/data:/data >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-v /cli/data:/data" "command-line mount wins under dstart"
+    assert_not_contains "$calls" "/file/data" "file mount dropped for shared target"
+
+    unmock_stat
+    unmock_uname
+    rm -rf "$project_dir"
+}
+
 test_reattach_does_not_use_mounts_files() {
     mock_reset
     mock_docker_response "info" 0 ""
@@ -2502,6 +2536,8 @@ main() {
     run_test test_start_cli_volume_overrides_mounts_files
     run_test test_start_cli_volume_keeps_unrelated_file_mounts
     run_test test_start_mounts_file_ro_option_target_matching
+    run_test test_dstart_applies_mounts_file
+    run_test test_dstart_cli_volume_overrides_mounts_file
     run_test test_reattach_does_not_use_mounts_files
     run_test test_restart_reapplies_mounts_files
 
