@@ -436,6 +436,37 @@ test_mounts_file_same_path_shorthand() {
     rm -f "$pdir/.cage.mounts"
 }
 
+test_mounts_file_same_path_with_options() {
+    local pdir; pdir="$(make_project_dir)"
+    local name; name="$(container_name_for "$pdir")"
+    local rw_dir; rw_dir="$(make_project_dir)"
+    local ro_dir; ro_dir="$(make_project_dir)"
+
+    echo "locked" > "$ro_dir/data.txt"
+    # '::' is same-path with no options; '::ro' is same-path, read-only.  The
+    # writable one is the control: it proves a failed write on the other is
+    # caused by ':ro' and not by ownership.
+    printf '%s::\n%s::ro\n' "$rw_dir" "$ro_dir" > "$pdir/.cage.mounts"
+
+    start_cage_in "$pdir" start
+    $DOCKER start "$name" >/dev/null 2>&1 || true
+
+    local content
+    content="$($DOCKER exec "$name" cat "$ro_dir/data.txt" 2>/dev/null)" || true
+    assert_eq "locked" "$content" "'::ro' mounts at the same absolute path"
+
+    local rw_rc=0 ro_rc=0
+    $DOCKER exec "$name" sh -c "echo probe > $rw_dir/probe.txt" >/dev/null 2>&1 || rw_rc=$?
+    $DOCKER exec "$name" sh -c "echo probe > $ro_dir/probe.txt" >/dev/null 2>&1 || ro_rc=$?
+    assert_eq "0" "$rw_rc" "'::' mount accepts writes"
+    if [ "$ro_rc" -eq 0 ]; then
+        fail "'::ro' mount should reject writes"
+    fi
+
+    cleanup_container "$name"
+    rm -f "$pdir/.cage.mounts"
+}
+
 test_mounts_file_override() {
     local pdir; pdir="$(make_project_dir)"
     local name; name="$(container_name_for "$pdir")"
@@ -689,6 +720,7 @@ main() {
     run_test test_mounts_file_project
     run_test test_mounts_file_global
     run_test test_mounts_file_same_path_shorthand
+    run_test test_mounts_file_same_path_with_options
     run_test test_mounts_file_override
     run_test test_mounts_file_readonly
 

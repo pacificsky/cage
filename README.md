@@ -183,16 +183,26 @@ Declare extra mounts once instead of passing `-v` on every `cage start` or `cage
 | `~/.config/cage/mounts` | Global | Applied to all cage containers |
 | `.cage.mounts` | Per-project | Applied to the current project's container |
 
-One `docker -v` spec per line. Blank lines and lines starting with `#` are ignored, a leading `~/` expands to your home directory, and a line with no `:` is mounted at the same absolute path inside the container.
+One `docker -v` spec per line. Blank lines and lines starting with `#` are ignored, and a leading `~/` expands to your home directory.
 
 ```bash
 # ~/.config/cage/mounts
-~/datasets
-~/.aws:/home/vscode/.aws:ro
+~/datasets                       # same absolute path inside the container
+~/models::ro                     # same path, read-only
+~/.aws:/home/vscode/.aws:ro      # explicit host:container:options
+cache-vol:/home/vscode/.cache    # named volume
 
 # ~/src/my-project/.cage.mounts
 /Volumes/scratch:/scratch
 ```
+
+| Form | Meaning |
+|------|---------|
+| `path` | Mounted at the same absolute path inside the container |
+| `path::options` | Same path, with Docker options (`ro`, `ro,z`, …) |
+| `host:container[:options]` | Passed to Docker verbatim |
+
+The empty middle field in `path::ro` is what asks for "same path on both sides" while still taking options — Docker rejects an empty container path, so the spelling is unambiguous. Note that `~` expands *only* at the start of a spec: `~/data:~/data:ro` does **not** work, because the container's home is `/home/vscode`, not yours. cage rejects a non-absolute container path with a message pointing at the `::` form rather than letting Docker fail obscurely.
 
 When two mounts share the same container-side path, the more specific one wins: `-v` on the command line beats `.cage.mounts`, which beats the global file. That makes it possible to point a project at a different source for a path the global file already claims.
 

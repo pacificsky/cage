@@ -74,7 +74,13 @@ cage adds extra bind mounts declared in mount files at container creation time, 
 - Global: `~/.config/cage/mounts` — applied to all cage containers
 - Per-project: `.cage.mounts` in the project directory — applied to that project's container only
 
-One `docker -v` spec per line. Blank lines and lines starting with `#` are ignored; leading `~/` expands to `$HOME`; a line with no `:` is expanded to `path:path` (same absolute path in the container). Everything else is passed to Docker verbatim, so `:ro` and named volumes work.
+One `docker -v` spec per line. Blank lines and lines starting with `#` are ignored; leading `~/` expands to `$HOME` (start of the spec only — the container home is `/home/vscode`, so expanding a container-side `~` would be a lie). Forms handled in `read_mounts_file`:
+
+- `path` → `path:path` (same absolute path in the container)
+- `path::opts` → `path:path:opts` — empty middle field means same path *with* options. Docker rejects an empty container path, so this spelling is free to take on a meaning; it avoids having to maintain a list of known option keywords to disambiguate `path:ro`.
+- anything else → passed to Docker verbatim, so named volumes work.
+
+`cmd_enter` rejects a non-absolute container target with a message pointing at the `::` form. That check lives in `cmd_enter`, not `read_mounts_file`, because the latter runs inside a process substitution where `die` could not halt the run.
 
 Precedence when two mounts share a container-side target: command-line `-v` > `.cage.mounts` > global file. `build_mount_args` resolves this by walking the collected specs back to front and skipping targets already claimed. Unlike `-v` flags, mount files are re-read on every container creation, so they survive `restart` and `upgrade`.
 
