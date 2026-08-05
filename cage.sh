@@ -211,7 +211,7 @@ read_mounts_file() {
     local file="$1"
     [ -f "$file" ] || return 0
 
-    local spec
+    local spec host opts
     # No IFS= here, so read strips leading/trailing whitespace from each line.
     while read -r spec || [ -n "$spec" ]; do
         case "$spec" in
@@ -219,8 +219,26 @@ read_mounts_file() {
             "~/"*)   spec="${HOME}/${spec#\~/}" ;;
         esac
         case "$spec" in
-            *:*) ;;
-            *)   spec="${spec}:${spec}" ;;
+            *::*)
+                # 'path::opts' — an empty middle field means the same absolute
+                # path inside the container, keeping the options.  Docker
+                # rejects an empty container path, so this spelling is free to
+                # take on a meaning.  Skipped if the host path itself has a
+                # colon, which is not a leading '::' at all.
+                host="${spec%%::*}"
+                opts="${spec#*::}"
+                case "$host" in
+                    *:*) ;;
+                    *)   if [ -n "$opts" ]; then
+                             spec="${host}:${host}:${opts}"
+                         else
+                             spec="${host}:${host}"
+                         fi
+                         ;;
+                esac
+                ;;
+            *:*) ;;                          # host:container[:opts] — verbatim
+            *)   spec="${spec}:${spec}" ;;   # bare path — same path, no options
         esac
         printf '%s\n' "$spec"
     done < "$file"
@@ -347,9 +365,21 @@ cmd_enter() {
             )
 
             # Extra mounts declared in ~/.config/cage/mounts and .cage.mounts.
+            # Validated here rather than in read_mounts_file, which runs in a
+            # process substitution where die() could not stop the run.
             local -a extra_mount_args=()
-            local mount_arg
+            local mount_arg prev_arg="" target
             while IFS= read -r mount_arg; do
+                if [ "$prev_arg" = "-v" ]; then
+                    target="$(mount_target "$mount_arg")"
+                    case "$target" in
+                        /*) ;;
+                        *)  die "invalid mount '${mount_arg}': container path '${target}' is not absolute.
+       For the same path on both sides with options, use 'host::options' (e.g. '~/data::ro').
+       '~' expands only at the start of a spec — the container home is /home/vscode." ;;
+                    esac
+                fi
+                prev_arg="$mount_arg"
                 extra_mount_args+=("$mount_arg")
             done < <(build_mount_args "$project_dir" ${cli_flags[@]+"${cli_flags[@]}"})
 
@@ -848,9 +878,11 @@ Mount files:
   ~/.config/cage/mounts   Global extra mounts for all containers (optional)
   .cage.mounts            Per-project extra mounts (optional, overrides global)
                           Format: one docker -v spec per line.  Blank lines
-                          and lines starting with # are ignored, '~/' expands
-                          to $HOME, and a line with no ':' is mounted at the
-                          same absolute path inside the container.
+                          and lines starting with # are ignored and a leading
+                          '~/' expands to $HOME.  Forms:
+                            path                     same path in container
+                            path::opts               same path, with options
+                            host:container[:opts]    passed to docker as-is
 
 Port (-p), volume (-v) flags and config files only apply when creating a new container.
 To change: cage.sh rm && cage.sh start -p 3000:3000 -v /data:/data

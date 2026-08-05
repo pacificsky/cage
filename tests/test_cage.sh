@@ -2193,6 +2193,81 @@ test_start_mounts_file_same_path_shorthand() {
     rm -rf "$project_dir"
 }
 
+test_start_mounts_file_same_path_with_options() {
+    local project_dir; project_dir="$(setup_mount_test)"
+    printf '/srv/data::ro\n~/notes::ro,z\n' > "$project_dir/.cage.mounts"
+
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-v /srv/data:/srv/data:ro" "'path::ro' means same path, read-only"
+    assert_contains "$calls" "-v ${HOME}/notes:${HOME}/notes:ro,z" "options list preserved verbatim"
+
+    rm -rf "$project_dir"
+}
+
+test_start_mounts_file_same_path_empty_options() {
+    local project_dir; project_dir="$(setup_mount_test)"
+    echo "/srv/data::" > "$project_dir/.cage.mounts"
+
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
+    assert_contains "$(mock_calls)" "-v /srv/data:/srv/data " "trailing '::' with no options is plain same-path"
+
+    rm -rf "$project_dir"
+}
+
+test_start_mounts_file_explicit_target_unaffected() {
+    local project_dir; project_dir="$(setup_mount_test)"
+    printf '/a:/b:ro\ncache-vol:/home/vscode/.cache\n' > "$project_dir/.cage.mounts"
+
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-v /a:/b:ro" "explicit host:container:opts passed through"
+    assert_contains "$calls" "-v cache-vol:/home/vscode/.cache" "named volume passed through"
+
+    rm -rf "$project_dir"
+}
+
+test_start_mounts_file_same_path_target_participates_in_precedence() {
+    local project_dir; project_dir="$(setup_mount_test)"
+    echo "/data::ro" > "$HOME/.config/cage/mounts"
+    echo "/project/data:/data" > "$project_dir/.cage.mounts"
+
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    # The '::' form's target is /data, so the project entry must still win.
+    assert_contains "$calls" "-v /project/data:/data" "project mount wins over '::' global"
+    assert_not_contains "$calls" "/data:/data:ro" "global '::' mount dropped for shared target"
+
+    rm -f "$HOME/.config/cage/mounts"
+    rm -rf "$project_dir"
+}
+
+test_start_mounts_file_rejects_relative_container_path() {
+    local project_dir; project_dir="$(setup_mount_test)"
+    echo "/srv/notes:ro" > "$project_dir/.cage.mounts"
+
+    local out rc=0
+    out="$(cd "$project_dir" && run_cage start 2>&1)" || rc=$?
+    assert_eq "1" "$rc" "exits non-zero on a relative container path"
+    assert_contains "$out" "container path 'ro' is not absolute" "names the offending path"
+    assert_contains "$out" "host::options" "suggests the '::' spelling"
+    assert_not_contains "$(mock_calls)" "create" "container is not created"
+
+    rm -rf "$project_dir"
+}
+
+test_start_mounts_file_rejects_tilde_container_path() {
+    local project_dir; project_dir="$(setup_mount_test)"
+    echo "/srv/x:~/x:ro" > "$project_dir/.cage.mounts"
+
+    local out rc=0
+    out="$(cd "$project_dir" && run_cage start 2>&1)" || rc=$?
+    assert_eq "1" "$rc" "exits non-zero on a container-side ~"
+    assert_contains "$out" "container path '~/x' is not absolute" "names the unexpanded ~ path"
+
+    rm -rf "$project_dir"
+}
+
 test_start_project_mounts_override_global() {
     local project_dir; project_dir="$(setup_mount_test)"
     echo "/global/data:/data" > "$HOME/.config/cage/mounts"
@@ -2532,6 +2607,12 @@ main() {
     run_test test_start_mounts_file_ignores_comments_and_blanks
     run_test test_start_mounts_file_expands_tilde
     run_test test_start_mounts_file_same_path_shorthand
+    run_test test_start_mounts_file_same_path_with_options
+    run_test test_start_mounts_file_same_path_empty_options
+    run_test test_start_mounts_file_explicit_target_unaffected
+    run_test test_start_mounts_file_same_path_target_participates_in_precedence
+    run_test test_start_mounts_file_rejects_relative_container_path
+    run_test test_start_mounts_file_rejects_tilde_container_path
     run_test test_start_project_mounts_override_global
     run_test test_start_cli_volume_overrides_mounts_files
     run_test test_start_cli_volume_keeps_unrelated_file_mounts
