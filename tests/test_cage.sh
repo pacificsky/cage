@@ -606,7 +606,7 @@ test_start_ignores_port_flags_when_running() {
     mock_docker_response "image" 1 ""
     mock_docker_response "attach" 0 ""
     local out; out="$(run_cage start -p 3000:3000 2>&1)"
-    assert_contains "$out" "ignoring -p flags" "port-ignored warning"
+    assert_contains "$out" "ignoring -p/-v flags" "port-ignored warning"
 }
 
 test_start_ignores_port_flags_when_stopped() {
@@ -616,7 +616,7 @@ test_start_ignores_port_flags_when_stopped() {
     mock_docker_response "image" 1 ""
     mock_docker_response "start" 0 ""
     local out; out="$(run_cage start -p 3000:3000 2>&1)"
-    assert_contains "$out" "ignoring -p flags" "port-ignored warning"
+    assert_contains "$out" "ignoring -p/-v flags" "port-ignored warning"
 }
 
 test_start_passes_port_to_docker_create() {
@@ -2092,6 +2092,237 @@ test_start_reattaches_via_routing() {
 }
 
 # ================================================================
+# Tests: mount file support
+# ================================================================
+
+# Shared setup for the mount-file tests: fresh mocks for a container that
+# does not exist yet, plus an empty project dir.  Echoes the project dir.
+setup_mount_test() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+
+    rm -f "$HOME/.config/cage/mounts"
+    mkdir -p "$HOME/.config/cage"
+    mktemp -d
+}
+
+test_start_global_mounts_file() {
+    local project_dir; project_dir="$(setup_mount_test)"
+    echo "/data:/data" > "$HOME/.config/cage/mounts"
+
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
+    assert_contains "$(mock_calls)" "-v /data:/data" "global mount in docker create"
+
+    rm -f "$HOME/.config/cage/mounts"
+    rm -rf "$project_dir"
+}
+
+test_start_project_mounts_file() {
+    local project_dir; project_dir="$(setup_mount_test)"
+    echo "/models:/models:ro" > "$project_dir/.cage.mounts"
+
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
+    assert_contains "$(mock_calls)" "-v /models:/models:ro" "project mount in docker create"
+
+    rm -rf "$project_dir"
+}
+
+test_start_both_mounts_files() {
+    local project_dir; project_dir="$(setup_mount_test)"
+    echo "/data:/data" > "$HOME/.config/cage/mounts"
+    echo "/models:/models" > "$project_dir/.cage.mounts"
+
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-v /data:/data" "global mount present"
+    assert_contains "$calls" "-v /models:/models" "project mount present"
+
+    rm -f "$HOME/.config/cage/mounts"
+    rm -rf "$project_dir"
+}
+
+test_start_no_mounts_files() {
+    local project_dir; project_dir="$(setup_mount_test)"
+
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    # Only cage's own two mounts (project dir and shared home) should appear.
+    assert_eq "2" "$(grep -o -- '-v ' <<<"$calls" | wc -l | tr -d ' ')" \
+        "no extra -v flags when mount files absent"
+
+    rm -rf "$project_dir"
+}
+
+test_start_mounts_file_ignores_comments_and_blanks() {
+    local project_dir; project_dir="$(setup_mount_test)"
+    printf '# a comment\n\n  \n  /data:/data  \n' > "$project_dir/.cage.mounts"
+
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-v /data:/data" "spec is read despite surrounding noise"
+    assert_not_contains "$calls" "a comment" "comment not passed to docker"
+    assert_eq "3" "$(grep -o -- '-v ' <<<"$calls" | wc -l | tr -d ' ')" \
+        "blank lines produce no mounts"
+
+    rm -rf "$project_dir"
+}
+
+test_start_mounts_file_expands_tilde() {
+    local project_dir; project_dir="$(setup_mount_test)"
+    echo "~/notes:/notes" > "$project_dir/.cage.mounts"
+
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
+    assert_contains "$(mock_calls)" "-v ${HOME}/notes:/notes" "leading ~/ expanded to \$HOME"
+
+    rm -rf "$project_dir"
+}
+
+test_start_mounts_file_same_path_shorthand() {
+    local project_dir; project_dir="$(setup_mount_test)"
+    printf '/srv/data\n~/notes\n' > "$project_dir/.cage.mounts"
+
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-v /srv/data:/srv/data" "colon-less line mounted at same path"
+    assert_contains "$calls" "-v ${HOME}/notes:${HOME}/notes" "shorthand expands ~ on both sides"
+
+    rm -rf "$project_dir"
+}
+
+test_start_project_mounts_override_global() {
+    local project_dir; project_dir="$(setup_mount_test)"
+    echo "/global/data:/data" > "$HOME/.config/cage/mounts"
+    echo "/project/data:/data" > "$project_dir/.cage.mounts"
+
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-v /project/data:/data" "project mount wins for shared target"
+    assert_not_contains "$calls" "/global/data" "global mount dropped for shared target"
+
+    rm -f "$HOME/.config/cage/mounts"
+    rm -rf "$project_dir"
+}
+
+test_start_cli_volume_overrides_mounts_files() {
+    local project_dir; project_dir="$(setup_mount_test)"
+    echo "/global/data:/data" > "$HOME/.config/cage/mounts"
+    echo "/project/data:/data" > "$project_dir/.cage.mounts"
+
+    (cd "$project_dir" && run_cage start -v /cli/data:/data >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-v /cli/data:/data" "command-line mount wins for shared target"
+    assert_not_contains "$calls" "/project/data" "project mount dropped for shared target"
+    assert_not_contains "$calls" "/global/data" "global mount dropped for shared target"
+
+    rm -f "$HOME/.config/cage/mounts"
+    rm -rf "$project_dir"
+}
+
+test_start_cli_volume_keeps_unrelated_file_mounts() {
+    local project_dir; project_dir="$(setup_mount_test)"
+    echo "/models:/models" > "$project_dir/.cage.mounts"
+
+    (cd "$project_dir" && run_cage start -v /cli/data:/data >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-v /cli/data:/data" "command-line mount present"
+    assert_contains "$calls" "-v /models:/models" "unrelated file mount kept"
+
+    rm -rf "$project_dir"
+}
+
+test_start_mounts_file_ro_option_target_matching() {
+    local project_dir; project_dir="$(setup_mount_test)"
+    echo "/global/data:/data:ro" > "$HOME/.config/cage/mounts"
+    echo "/project/data:/data" > "$project_dir/.cage.mounts"
+
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-v /project/data:/data" "project mount wins"
+    assert_not_contains "$calls" "/global/data" "target matched despite :ro option on global"
+
+    rm -f "$HOME/.config/cage/mounts"
+    rm -rf "$project_dir"
+}
+
+test_dstart_applies_mounts_file() {
+    local project_dir; project_dir="$(setup_mount_test)"
+    mock_uname Linux
+    mock_stat_gid 999
+    echo "/models:/models" > "$project_dir/.cage.mounts"
+
+    (cd "$project_dir" && run_cage dstart >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    # dstart delegates to cmd_enter, so mount files apply there too — this
+    # pins that delegation, which is the only reason it works.
+    assert_contains "$calls" "-v /models:/models" "mount file applied by dstart"
+    assert_contains "$calls" "cage.docker=host" "still a docker-enabled cage"
+
+    unmock_stat
+    unmock_uname
+    rm -rf "$project_dir"
+}
+
+test_dstart_cli_volume_overrides_mounts_file() {
+    local project_dir; project_dir="$(setup_mount_test)"
+    mock_uname Linux
+    mock_stat_gid 999
+    echo "/file/data:/data" > "$project_dir/.cage.mounts"
+
+    (cd "$project_dir" && run_cage dstart -v /cli/data:/data >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-v /cli/data:/data" "command-line mount wins under dstart"
+    assert_not_contains "$calls" "/file/data" "file mount dropped for shared target"
+
+    unmock_stat
+    unmock_uname
+    rm -rf "$project_dir"
+}
+
+test_reattach_does_not_use_mounts_files() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 0 "true"
+    mock_docker_response "image" 1 ""
+    mock_docker_response "attach" 0 ""
+
+    mkdir -p "$HOME/.config/cage"
+    echo "/data:/data" > "$HOME/.config/cage/mounts"
+    local project_dir; project_dir="$(mktemp -d)"
+    echo "/models:/models" > "$project_dir/.cage.mounts"
+
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
+    assert_not_contains "$(mock_calls)" "-v " "no mounts on reattach"
+
+    rm -f "$HOME/.config/cage/mounts"
+    rm -rf "$project_dir"
+}
+
+test_restart_reapplies_mounts_files() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    # First inspect: container exists.  Second (from cmd_enter): gone after rm.
+    mock_docker_response_n "inspect" 1 0 "true"
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "rm" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+
+    local project_dir; project_dir="$(mktemp -d)"
+    echo "/models:/models" > "$project_dir/.cage.mounts"
+
+    (cd "$project_dir" && run_cage restart >/dev/null 2>&1 || true)
+    assert_contains "$(mock_calls)" "-v /models:/models" "mount file reapplied on restart"
+
+    rm -rf "$project_dir"
+}
+
+
+# ================================================================
 # Run all tests
 # ================================================================
 
@@ -2291,6 +2522,24 @@ main() {
     run_test test_no_routing_without_cage_vm_socket
     run_test test_no_routing_on_linux
     run_test test_start_reattaches_via_routing
+
+    echo ""
+    echo "--- mount file support ---"
+    run_test test_start_global_mounts_file
+    run_test test_start_project_mounts_file
+    run_test test_start_both_mounts_files
+    run_test test_start_no_mounts_files
+    run_test test_start_mounts_file_ignores_comments_and_blanks
+    run_test test_start_mounts_file_expands_tilde
+    run_test test_start_mounts_file_same_path_shorthand
+    run_test test_start_project_mounts_override_global
+    run_test test_start_cli_volume_overrides_mounts_files
+    run_test test_start_cli_volume_keeps_unrelated_file_mounts
+    run_test test_start_mounts_file_ro_option_target_matching
+    run_test test_dstart_applies_mounts_file
+    run_test test_dstart_cli_volume_overrides_mounts_file
+    run_test test_reattach_does_not_use_mounts_files
+    run_test test_restart_reapplies_mounts_files
 
     print_summary
 }

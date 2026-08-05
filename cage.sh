@@ -202,6 +202,83 @@ check_colima_ssh_agent() {
     info "Fix: colima stop && colima start --ssh-agent"
 }
 
+# Read mount specs from a mounts file, one per line.  Blank lines and lines
+# starting with '#' are ignored.  A leading '~/' expands to $HOME.  A line with
+# no ':' is shorthand for mounting a host path at the same absolute path inside
+# the container, the way the project dir is mounted.  Anything else is handed to
+# docker verbatim, so ':ro' options and named volumes work as usual.
+read_mounts_file() {
+    local file="$1"
+    [ -f "$file" ] || return 0
+
+    local spec
+    # No IFS= here, so read strips leading/trailing whitespace from each line.
+    while read -r spec || [ -n "$spec" ]; do
+        case "$spec" in
+            ""|"#"*) continue ;;
+            "~/"*)   spec="${HOME}/${spec#\~/}" ;;
+        esac
+        case "$spec" in
+            *:*) ;;
+            *)   spec="${spec}:${spec}" ;;
+        esac
+        printf '%s\n' "$spec"
+    done < "$file"
+}
+
+# The container-side target of a docker -v spec: the field after the first
+# colon, with any trailing options (':ro') removed.
+mount_target() {
+    local spec="$1"
+    local rest="${spec#*:}"
+    printf '%s\n' "${rest%%:*}"
+}
+
+# Emit '-v' and '<spec>' (one per line) for every extra mount declared in
+# ~/.config/cage/mounts and <project>/.cage.mounts.  When two mounts share a
+# container target the more specific one wins: a -v on the command line beats
+# the per-project file, which beats the global file.
+build_mount_args() {
+    local project_dir="$1"
+    shift
+
+    # Targets already claimed by command-line -v flags, delimited for lookup.
+    local claimed="|"
+    local target
+    while [ $# -gt 0 ]; do
+        if [ "$1" = "-v" ] && [ $# -ge 2 ]; then
+            target="$(mount_target "$2")"
+            claimed="${claimed}${target}|"
+            shift 2
+        else
+            shift
+        fi
+    done
+
+    local -a specs=()
+    local spec
+    while IFS= read -r spec; do
+        specs+=("$spec")
+    done < <(read_mounts_file "$HOME/.config/cage/mounts"
+             read_mounts_file "${project_dir}/.cage.mounts")
+
+    # Walk back to front so the last declaration of a target is the one kept,
+    # prepending each survivor so the emitted order still matches the files.
+    local -a out=()
+    local i
+    for (( i=${#specs[@]}-1; i>=0; i-- )); do
+        target="$(mount_target "${specs[$i]}")"
+        case "$claimed" in
+            *"|${target}|"*) continue ;;
+        esac
+        claimed="${claimed}${target}|"
+        out=(-v "${specs[$i]}" ${out[@]+"${out[@]}"})
+    done
+
+    [ ${#out[@]} -gt 0 ] || return 0
+    printf '%s\n' "${out[@]}"
+}
+
 # Copy seed files from ~/.config/cage/home/ into the container's /home/vscode/.
 # Uses cp -n (no-clobber) so existing files in the volume are never overwritten.
 # The container must be in "created" (stopped) state.  This function starts
@@ -226,7 +303,8 @@ seed_home() {
 cmd_enter() {
     local project_dir="$1"
     shift
-    local -a port_flags=("$@")
+    # Holds the -p and -v flags collected from the command line.
+    local -a cli_flags=("$@")
 
     local name
     name="$(container_name "$project_dir")"
@@ -237,8 +315,8 @@ cmd_enter() {
 
     case "$state" in
         running)
-            if [ ${#port_flags[@]} -gt 0 ]; then
-                info "Container already exists — ignoring -p flags. Use 'cage.sh rm' to recreate with new ports."
+            if [ ${#cli_flags[@]} -gt 0 ]; then
+                info "Container already exists — ignoring -p/-v flags. Use 'cage.sh rm' to recreate with new ports and mounts."
             fi
             if image_newer_available "$name"; then
                 info "A newer image is available. Run 'cage upgrade' to upgrade."
@@ -247,8 +325,8 @@ cmd_enter() {
             drop_into_cage "$name" $DOCKER attach "$name"
             ;;
         stopped)
-            if [ ${#port_flags[@]} -gt 0 ]; then
-                info "Container already exists — ignoring -p flags. Use 'cage.sh rm' to recreate with new ports."
+            if [ ${#cli_flags[@]} -gt 0 ]; then
+                info "Container already exists — ignoring -p/-v flags. Use 'cage.sh rm' to recreate with new ports and mounts."
             fi
             if image_newer_available "$name"; then
                 info "A newer image is available. Run 'cage upgrade' to upgrade."
@@ -267,6 +345,13 @@ cmd_enter() {
                 -v "${project_dir}:${project_dir}"
                 -v "${HOME_VOL}:/home/vscode"
             )
+
+            # Extra mounts declared in ~/.config/cage/mounts and .cage.mounts.
+            local -a extra_mount_args=()
+            local mount_arg
+            while IFS= read -r mount_arg; do
+                extra_mount_args+=("$mount_arg")
+            done < <(build_mount_args "$project_dir" ${cli_flags[@]+"${cli_flags[@]}"})
 
             # Forward the host SSH agent so git/ssh work inside the container.
             local -a ssh_agent_args=()
@@ -313,8 +398,9 @@ cmd_enter() {
                 --name "$name" \
                 --hostname "$name" \
                 --workdir "$project_dir" \
-                ${port_flags[@]+"${port_flags[@]}"} \
+                ${cli_flags[@]+"${cli_flags[@]}"} \
                 "${mount_args[@]}" \
+                ${extra_mount_args[@]+"${extra_mount_args[@]}"} \
                 ${ssh_agent_args[@]+"${ssh_agent_args[@]}"} \
                 ${env_file_args[@]+"${env_file_args[@]}"} \
                 ${docker_args[@]+"${docker_args[@]}"} \
@@ -758,7 +844,15 @@ Environment files:
   .cage.env               Per-project env vars (optional, overrides global)
                           Format: KEY=VALUE lines, # comments, blank lines
 
-Port (-p), volume (-v) flags and env files only apply when creating a new container.
+Mount files:
+  ~/.config/cage/mounts   Global extra mounts for all containers (optional)
+  .cage.mounts            Per-project extra mounts (optional, overrides global)
+                          Format: one docker -v spec per line.  Blank lines
+                          and lines starting with # are ignored, '~/' expands
+                          to $HOME, and a line with no ':' is mounted at the
+                          same absolute path inside the container.
+
+Port (-p), volume (-v) flags and config files only apply when creating a new container.
 To change: cage.sh rm && cage.sh start -p 3000:3000 -v /data:/data
 EOF
 }
