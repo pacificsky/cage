@@ -85,6 +85,17 @@ One `docker -v` spec per line. Blank lines and lines starting with `#` are ignor
 
 Precedence when two mounts share a container-side target: command-line `-v` > `.cage.mounts` > global file. `build_mount_args` resolves this by walking the collected specs back to front and skipping targets already claimed. Mount files are re-read on every container creation, so edits take effect on the next recreation and their mounts outlive `cage rm`; CLI `-v` flags are instead preserved verbatim via labels (see below), so a restored `-v` keeps its top precedence and can shadow a later mount-file edit until `cage rm`.
 
+### Port Files
+
+cage publishes extra ports declared in port files at container creation time, as `-p` flags on `docker create`.
+
+- Global: `~/.config/cage/ports` — applied to all cage containers
+- Per-project: `.cage.ports` in the project directory — applied to that project's container only
+
+One `docker -p` spec per line; blank lines and `#` comments ignored; no `~` expansion (ports aren't paths); specs pass to Docker verbatim. Precedence when two specs publish the same container port: command-line `-p` > `.cage.ports` > global file, resolved by `build_port_args` the same back-to-front way as `build_mount_args`. The dedup key from `port_target` is container port + protocol (`3000:3000` and `9999:3000` conflict; `3000:3000/udp` coexists with `3000:3000`).
+
+Like mount files, port files are re-read on every container creation — surviving `restart`, `upgrade`, and `rm` — and are deliberately **not** recorded in the `cage.ports` label, which holds only CLI flags. A restored CLI `-p` can therefore shadow a later port-file edit for the same container port until `cage rm`, mirroring the `-v` story.
+
 ### Container Labels
 
 Every label is set at `docker create` time and dies with the container (`cage rm` = forget config; `restart`/`upgrade` = preserve it):

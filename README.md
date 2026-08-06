@@ -212,6 +212,30 @@ When two mounts share the same container-side path, the more specific one wins: 
 
 Mount files are read at container creation time. After changes: `cage rm && cage start`. Unlike `-v` flags, they are re-read on every creation, so edits to them take effect on the next recreation — and their mounts outlive `cage rm`.
 
+### Port Files
+
+Persist port mappings the same way mount files persist mounts:
+
+| File | Scope |
+|------|-------|
+| `~/.config/cage/ports` | All cage containers |
+| `.cage.ports` (project directory) | That project's container only |
+
+One `docker -p` spec per line — `3000:3000`, `127.0.0.1:8080:80`, `8080:80/udp`, ranges. Blank lines and `#` comments are ignored.
+
+```bash
+# ~/.config/cage/ports
+8080:8080
+
+# ~/src/my-project/.cage.ports
+3000:3000
+5353:53/udp
+```
+
+When two specs publish the same container port (protocol-aware, so `53/udp` and `53/tcp` coexist), the more specific source wins: `-p` on the command line beats `.cage.ports`, which beats the global file — the same precedence as mounts.
+
+Port files are re-read on every container creation, so edits take effect on the next recreation and the mappings outlive `cage rm` — unlike `-p` flags, which are recorded on the container and die with it. As with mounts, a remembered `-p` from the container's creation outranks a later port-file edit for the same container port until `cage rm`.
+
 ### Seed Directory
 
 `~/.config/cage/home/` contents are copied into `/home/vscode/` on new container creation (no-clobber — existing files are never overwritten). Use this to pre-populate dotfiles, shell config, or tool settings.

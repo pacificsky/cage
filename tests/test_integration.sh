@@ -571,6 +571,27 @@ test_restart_recreates() {
     cleanup_container "$name"
 }
 
+test_ports_file_project() {
+    local pdir; pdir="$(make_project_dir)"
+    local name; name="$(container_name_for "$pdir")"
+    echo "18082:80" > "$pdir/.cage.ports"
+
+    start_cage_in "$pdir" start
+    local ports
+    ports="$($DOCKER port "$name" 2>/dev/null)" || true
+    assert_contains "$ports" "18082" "ports-file port published"
+
+    # Port files are re-read on recreation (not frozen into labels): edit
+    # the file, restart, and the new mapping must win.
+    echo "18083:80" > "$pdir/.cage.ports"
+    $DOCKER stop "$name" >/dev/null 2>&1 || true
+    start_cage_in "$pdir" restart
+    ports="$($DOCKER port "$name" 2>/dev/null)" || true
+    assert_contains "$ports" "18083" "edited ports file applied on restart"
+
+    cleanup_container "$name"
+}
+
 test_restart_preserves_ports_and_volumes() {
     local pdir; pdir="$(make_project_dir)"
     local name; name="$(container_name_for "$pdir")"
@@ -771,6 +792,10 @@ main() {
     run_test test_mounts_file_same_path_with_options
     run_test test_mounts_file_override
     run_test test_mounts_file_readonly
+
+    echo ""
+    echo "--- port file ---"
+    run_test test_ports_file_project
 
     echo ""
     echo "--- listing and cleanup ---"

@@ -349,6 +349,80 @@ build_mount_args() {
     printf '%s\n' "${out[@]}"
 }
 
+# Read port specs from a ports file, one docker -p spec per line.  Blank
+# lines and lines starting with '#' are ignored; every other line is handed
+# to docker -p verbatim (host:container, ip:host:container, ranges, /udp).
+read_ports_file() {
+    local file="$1"
+    [ -f "$file" ] || return 0
+
+    local spec
+    # No IFS= here, so read strips leading/trailing whitespace from each line.
+    while read -r spec || [ -n "$spec" ]; do
+        case "$spec" in
+            ""|"#"*) continue ;;
+        esac
+        printf '%s\n' "$spec"
+    done < "$file"
+}
+
+# The container-side key of a -p spec: the container port plus protocol.
+# '3000:3000' and '9999:3000' share the key 3000/tcp and conflict;
+# '3000:3000/udp' is a different mapping and coexists.
+port_target() {
+    local spec="$1"
+    local proto="tcp"
+    case "$spec" in
+        */*) proto="${spec##*/}"; spec="${spec%/*}" ;;
+    esac
+    printf '%s\n' "${spec##*:}/${proto}"
+}
+
+# Emit '-p' and '<spec>' (one per line) for every extra port declared in
+# ~/.config/cage/ports and <project>/.cage.ports.  Same precedence story as
+# build_mount_args: when two specs publish the same container port, a -p on
+# the command line beats the per-project file, which beats the global file.
+build_port_args() {
+    local project_dir="$1"
+    shift
+
+    # Targets already claimed by command-line -p flags, delimited for lookup.
+    local claimed="|"
+    local target
+    while [ $# -gt 0 ]; do
+        if [ "$1" = "-p" ] && [ $# -ge 2 ]; then
+            target="$(port_target "$2")"
+            claimed="${claimed}${target}|"
+            shift 2
+        else
+            shift
+        fi
+    done
+
+    local -a specs=()
+    local spec
+    while IFS= read -r spec; do
+        specs+=("$spec")
+    done < <(read_ports_file "$HOME/.config/cage/ports"
+             read_ports_file "${project_dir}/.cage.ports")
+
+    # Walk back to front so the last declaration of a target is the one kept,
+    # prepending each survivor so the emitted order still matches the files.
+    local -a out=()
+    local i
+    for (( i=${#specs[@]}-1; i>=0; i-- )); do
+        target="$(port_target "${specs[$i]}")"
+        case "$claimed" in
+            *"|${target}|"*) continue ;;
+        esac
+        claimed="${claimed}${target}|"
+        out=(-p "${specs[$i]}" ${out[@]+"${out[@]}"})
+    done
+
+    [ ${#out[@]} -gt 0 ] || return 0
+    printf '%s\n' "${out[@]}"
+}
+
 # Copy seed files from ~/.config/cage/home/ into the container's /home/vscode/.
 # Uses cp -n (no-clobber) so existing files in the volume are never overwritten.
 # The container must be in "created" (stopped) state.  This function starts
@@ -442,6 +516,15 @@ cmd_enter() {
                 extra_mount_args+=("$mount_arg")
             done < <(build_mount_args "$project_dir" ${cli_flags[@]+"${cli_flags[@]}"})
 
+            # Extra ports declared in ~/.config/cage/ports and .cage.ports.
+            # File-sourced, so they are re-read on every creation and are
+            # deliberately NOT recorded in the cage.ports label.
+            local -a extra_port_args=()
+            local port_arg
+            while IFS= read -r port_arg; do
+                extra_port_args+=("$port_arg")
+            done < <(build_port_args "$project_dir" ${cli_flags[@]+"${cli_flags[@]}"})
+
             # Forward the host SSH agent so git/ssh work inside the container.
             local -a ssh_agent_args=()
             if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -505,6 +588,7 @@ cmd_enter() {
                 ${flag_label_args[@]+"${flag_label_args[@]}"} \
                 "${mount_args[@]}" \
                 ${extra_mount_args[@]+"${extra_mount_args[@]}"} \
+                ${extra_port_args[@]+"${extra_port_args[@]}"} \
                 ${ssh_agent_args[@]+"${ssh_agent_args[@]}"} \
                 ${env_file_args[@]+"${env_file_args[@]}"} \
                 ${docker_args[@]+"${docker_args[@]}"} \
@@ -997,6 +1081,14 @@ Mount files:
                             path                     same path in container
                             path::opts               same path, with options
                             host:container[:opts]    passed to docker as-is
+
+Port files:
+  ~/.config/cage/ports    Global extra ports for all containers (optional)
+  .cage.ports             Per-project extra ports (optional, overrides global)
+                          Format: one docker -p spec per line (e.g. 3000:3000,
+                          8080:80/udp).  Blank lines and # comments ignored.
+                          For the same container port: -p beats .cage.ports,
+                          which beats the global file.
 
 Port (-p), volume (-v) flags and config files only apply when creating a new container.
 To change: cage.sh rm && cage.sh start -p 3000:3000 -v /data:/data

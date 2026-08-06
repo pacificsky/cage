@@ -2622,6 +2622,180 @@ test_restart_reapplies_mounts_files() {
     rm -rf "$project_dir"
 }
 
+# ================================================================
+# Tests: port file support
+# ================================================================
+
+# Shared setup for the port-file tests: fresh mocks for a container that
+# does not exist yet, plus an empty project dir.  Echoes the project dir.
+setup_ports_test() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+
+    rm -f "$HOME/.config/cage/ports"
+    mkdir -p "$HOME/.config/cage"
+    mktemp -d
+}
+
+test_start_global_ports_file() {
+    local project_dir; project_dir="$(setup_ports_test)"
+    echo "8080:80" > "$HOME/.config/cage/ports"
+
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
+    assert_contains "$(mock_calls)" "-p 8080:80" "global port in docker create"
+
+    rm -f "$HOME/.config/cage/ports"
+    rm -rf "$project_dir"
+}
+
+test_start_project_ports_file() {
+    local project_dir; project_dir="$(setup_ports_test)"
+    echo "3000:3000" > "$project_dir/.cage.ports"
+
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
+    assert_contains "$(mock_calls)" "-p 3000:3000" "project port in docker create"
+
+    rm -rf "$project_dir"
+}
+
+test_start_both_ports_files() {
+    local project_dir; project_dir="$(setup_ports_test)"
+    echo "8080:80" > "$HOME/.config/cage/ports"
+    echo "3000:3000" > "$project_dir/.cage.ports"
+
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-p 8080:80" "global port present"
+    assert_contains "$calls" "-p 3000:3000" "project port present"
+
+    rm -f "$HOME/.config/cage/ports"
+    rm -rf "$project_dir"
+}
+
+test_start_project_ports_override_global() {
+    local project_dir; project_dir="$(setup_ports_test)"
+    echo "8080:80" > "$HOME/.config/cage/ports"
+    echo "9090:80" > "$project_dir/.cage.ports"
+
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-p 9090:80" "project spec wins for container port 80"
+    assert_not_contains "$calls" "8080:80" "global spec for same container port skipped"
+
+    rm -f "$HOME/.config/cage/ports"
+    rm -rf "$project_dir"
+}
+
+test_start_cli_port_overrides_ports_files() {
+    local project_dir; project_dir="$(setup_ports_test)"
+    echo "8888:80" > "$project_dir/.cage.ports"
+
+    (cd "$project_dir" && run_cage start -p 9999:80 >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-p 9999:80" "CLI spec wins for container port 80"
+    assert_not_contains "$calls" "8888:80" "file spec for same container port skipped"
+
+    rm -rf "$project_dir"
+}
+
+test_start_cli_port_keeps_unrelated_file_ports() {
+    local project_dir; project_dir="$(setup_ports_test)"
+    echo "8080:80" > "$project_dir/.cage.ports"
+
+    (cd "$project_dir" && run_cage start -p 3000:3000 >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-p 3000:3000" "CLI port applied"
+    assert_contains "$calls" "-p 8080:80" "file port for a different container port kept"
+
+    rm -rf "$project_dir"
+}
+
+test_start_ports_file_udp_distinct_from_tcp() {
+    local project_dir; project_dir="$(setup_ports_test)"
+    echo "5353:53/udp" > "$project_dir/.cage.ports"
+
+    (cd "$project_dir" && run_cage start -p 9953:53 >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-p 5353:53/udp" "udp mapping kept"
+    assert_contains "$calls" "-p 9953:53" "tcp mapping to same port number kept"
+
+    rm -rf "$project_dir"
+}
+
+test_start_ports_file_ignores_comments_and_blanks() {
+    local project_dir; project_dir="$(setup_ports_test)"
+    printf '# a comment\n\n  \n  3000:3000  \n' > "$project_dir/.cage.ports"
+
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-p 3000:3000" "spec is read despite surrounding noise"
+    assert_not_contains "$calls" "a comment" "comment not passed to docker"
+    assert_eq "1" "$(grep -o -- '-p ' <<<"$calls" | wc -l | tr -d ' ')" \
+        "blank lines produce no ports"
+
+    rm -rf "$project_dir"
+}
+
+test_start_ports_file_not_recorded_in_label() {
+    local project_dir; project_dir="$(setup_ports_test)"
+    echo "8080:80" > "$project_dir/.cage.ports"
+
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-p 8080:80" "file port applied"
+    # File ports are re-read on every creation; only CLI -p flags belong
+    # in the cage.ports label.
+    assert_not_contains "$calls" "cage.ports=" "file port not frozen into the label"
+
+    rm -rf "$project_dir"
+}
+
+test_reattach_does_not_use_ports_files() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 0 "true"
+    mock_docker_response "image" 1 ""
+    mock_docker_response "attach" 0 ""
+
+    mkdir -p "$HOME/.config/cage"
+    echo "8080:80" > "$HOME/.config/cage/ports"
+    local project_dir; project_dir="$(mktemp -d)"
+    echo "3000:3000" > "$project_dir/.cage.ports"
+
+    (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
+    assert_not_contains "$(mock_calls)" "-p " "no ports on reattach"
+
+    rm -f "$HOME/.config/cage/ports"
+    rm -rf "$project_dir"
+}
+
+test_restart_reapplies_ports_files() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    # First inspect: container exists.  Catch-all: label reads empty, and
+    # after rm the container is gone.
+    mock_docker_response_n "inspect" 1 0 "true"
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "rm" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+
+    local project_dir; project_dir="$(mktemp -d)"
+    echo "18080:80" > "$project_dir/.cage.ports"
+
+    (cd "$project_dir" && run_cage restart >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-p 18080:80" "ports file reapplied on restart"
+    assert_not_contains "$calls" "cage.ports=" "reapplied file port still not labeled"
+
+    rm -rf "$project_dir"
+}
+
 
 # ================================================================
 # Run all tests
@@ -2859,6 +3033,20 @@ main() {
     run_test test_dstart_cli_volume_overrides_mounts_file
     run_test test_reattach_does_not_use_mounts_files
     run_test test_restart_reapplies_mounts_files
+
+    echo ""
+    echo "--- port file support ---"
+    run_test test_start_global_ports_file
+    run_test test_start_project_ports_file
+    run_test test_start_both_ports_files
+    run_test test_start_project_ports_override_global
+    run_test test_start_cli_port_overrides_ports_files
+    run_test test_start_cli_port_keeps_unrelated_file_ports
+    run_test test_start_ports_file_udp_distinct_from_tcp
+    run_test test_start_ports_file_ignores_comments_and_blanks
+    run_test test_start_ports_file_not_recorded_in_label
+    run_test test_reattach_does_not_use_ports_files
+    run_test test_restart_reapplies_ports_files
 
     print_summary
 }
