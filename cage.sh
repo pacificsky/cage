@@ -540,14 +540,20 @@ setup_colima_cage() {
     src_root="${src_root:-$HOME/src}"
     src_root="${src_root%/}"
 
+    # Applies to both errors below: an already-provisioned VM won't pick
+    # up a CAGE_SRC_ROOT change until it is recreated.
+    local vm_note=""
+    if [ -d "$HOME/.colima/$COLIMA_PROFILE" ]; then
+        vm_note=" Note: the cage VM keeps the mounts it was created with — after changing CAGE_SRC_ROOT, run 'colima delete --profile $COLIMA_PROFILE' and dstart again."
+    fi
+
+    [ -d "$src_root" ] || die "CAGE_SRC_ROOT ($src_root) does not exist — it is the only host directory mounted into the cage VM, so dstart needs it.
+       Create it (mkdir -p $src_root) or set CAGE_SRC_ROOT in ~/.config/cage/env to your source root.$vm_note"
+
     case "$project_dir/" in
         "$src_root"/*) ;;
         *)
-            local hint=""
-            if [ -d "$HOME/.colima/$COLIMA_PROFILE" ]; then
-                hint=" Note: the cage VM keeps the mounts it was created with — after changing CAGE_SRC_ROOT, run 'colima delete --profile $COLIMA_PROFILE' and dstart again."
-            fi
-            die "project $project_dir is outside CAGE_SRC_ROOT ($src_root), so it can't be mounted into the cage VM. Set CAGE_SRC_ROOT in ~/.config/cage/env or move the project.$hint"
+            die "project $project_dir is outside CAGE_SRC_ROOT ($src_root), so it can't be mounted into the cage VM. Set CAGE_SRC_ROOT in ~/.config/cage/env or move the project.$vm_note"
             ;;
     esac
 

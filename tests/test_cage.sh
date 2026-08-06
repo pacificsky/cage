@@ -2039,13 +2039,36 @@ test_dstart_macos_project_outside_src_root() {
     chmod +x "$MOCK_DIR/colima"
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
-    # Project dir outside the default CAGE_SRC_ROOT ($HOME/src).
+    # Src root exists, but the project dir lives outside it.
+    mkdir -p "$HOME/src"
     local pdir; pdir="$(mktemp -d)"
     local out rc=0
     out="$( (cd "$pdir" && DOCKER_HOST= bash "$CAGE_SH" dstart 2>&1) )" || rc=$?
     assert_eq "1" "$rc" "exit code"
-    assert_contains "$out" "CAGE_SRC_ROOT" "mentions the knob"
+    assert_contains "$out" "outside CAGE_SRC_ROOT" "names the actual problem"
     assert_not_contains "$out" "colima delete" "no delete hint when profile absent"
+    rm -rf "$pdir" "$MOCK_DIR/colima"
+    [ "$HOME" = "$FAKE_HOME" ] && rm -rf "$HOME/src"
+    unmock_uname
+}
+
+test_dstart_macos_requires_src_root_to_exist() {
+    mock_reset
+    mock_uname Darwin
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$MOCK_DIR/colima"
+    chmod +x "$MOCK_DIR/colima"
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    # Default CAGE_SRC_ROOT ($HOME/src) is absent.
+    [ "$HOME" = "$FAKE_HOME" ] && rm -rf "$HOME/src"
+    local pdir; pdir="$(mktemp -d)"
+    local out rc=0
+    out="$( (cd "$pdir" && DOCKER_HOST= bash "$CAGE_SH" dstart 2>&1) )" || rc=$?
+    assert_eq "1" "$rc" "exit code"
+    assert_contains "$out" "does not exist" "explains the missing directory"
+    assert_contains "$out" "mkdir -p" "suggests creating it"
+    assert_contains "$out" "CAGE_SRC_ROOT" "mentions the knob"
+    assert_not_contains "$out" "outside CAGE_SRC_ROOT" "missing-root error, not the outside-root one"
     rm -rf "$pdir" "$MOCK_DIR/colima"
     unmock_uname
 }
@@ -2059,13 +2082,14 @@ test_dstart_macos_src_root_change_hint() {
     mock_docker_response "inspect" 1 ""
     # Profile dir exists → error must include the delete hint.
     mkdir -p "$HOME/.colima/cage"
+    mkdir -p "$HOME/src"    # src root exists; project outside it
     local pdir; pdir="$(mktemp -d)"
     local out rc=0
     out="$( (cd "$pdir" && DOCKER_HOST= bash "$CAGE_SH" dstart 2>&1) )" || rc=$?
     assert_eq "1" "$rc" "exit code"
     assert_contains "$out" "colima delete --profile cage" "delete hint when profile exists"
     rm -rf "$pdir" "$MOCK_DIR/colima"
-    [ "$HOME" = "$FAKE_HOME" ] && rm -rf "$HOME/.colima"
+    [ "$HOME" = "$FAKE_HOME" ] && rm -rf "$HOME/.colima" "$HOME/src"
     unmock_uname
 }
 
@@ -2794,6 +2818,7 @@ main() {
     run_test test_dstart_macos_requires_colima
     run_test test_dstart_macos_requires_docker_cli
     run_test test_dstart_macos_project_outside_src_root
+    run_test test_dstart_macos_requires_src_root_to_exist
     run_test test_dstart_macos_src_root_change_hint
     run_test test_dstart_macos_provisions_vm_first_run
     run_test test_dstart_macos_skips_provision_when_vm_running
