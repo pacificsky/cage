@@ -137,6 +137,8 @@ These are set automatically on every container:
 
 The `cage-home` volume is shared across all cage containers and projects. Claude credentials, git config, shell history, and tool state all live here — configure once, share everywhere.
 
+One exception: named volumes are per-daemon, and on macOS docker-enabled cages live in the cage VM's daemon — so they share a *separate* `cage-home` among themselves, not the one your plain cages use. See [Docker inside your cage](#docker-inside-your-cage-multi-service-projects).
+
 ### Image Updates
 
 Cage automatically pulls the latest image when creating a brand-new container (`cage restart` is the exception — it recreates from the container's original image). When re-attaching to an existing container, it warns if a newer version of that container's image is available:
