@@ -577,6 +577,9 @@ test_ports_file_project() {
     echo "18082:80" > "$pdir/.cage.ports"
 
     start_cage_in "$pdir" start
+    # `podman port` (unlike docker) reports nothing for a created-but-not-
+    # running container, so make sure it is up before asserting mappings.
+    $DOCKER start "$name" >/dev/null 2>&1 || true
     local ports
     ports="$($DOCKER port "$name" 2>/dev/null)" || true
     assert_contains "$ports" "18082" "ports-file port published"
@@ -586,6 +589,7 @@ test_ports_file_project() {
     echo "18083:80" > "$pdir/.cage.ports"
     $DOCKER stop "$name" >/dev/null 2>&1 || true
     start_cage_in "$pdir" restart
+    $DOCKER start "$name" >/dev/null 2>&1 || true
     ports="$($DOCKER port "$name" 2>/dev/null)" || true
     assert_contains "$ports" "18083" "edited ports file applied on restart"
 
@@ -600,6 +604,9 @@ test_restart_preserves_ports_and_volumes() {
     start_cage_in "$pdir" start -p 18080:80 -v "$vdir:/cage-extra"
     $DOCKER stop "$name" >/dev/null 2>&1 || true
     start_cage_in "$pdir" restart
+    # `podman port` (unlike docker) reports nothing for a created-but-not-
+    # running container, so make sure it is up before asserting mappings.
+    $DOCKER start "$name" >/dev/null 2>&1 || true
 
     # The recreated container should carry both labels forward...
     local ports_label vols_label
@@ -613,7 +620,6 @@ test_restart_preserves_ports_and_volumes() {
     ports="$($DOCKER port "$name" 2>/dev/null)" || true
     assert_contains "$ports" "18080" "published port survives restart"
 
-    $DOCKER start "$name" >/dev/null 2>&1 || true
     local mounted
     mounted="$($DOCKER exec "$name" sh -c 'test -d /cage-extra && echo yes' 2>/dev/null)" || true
     assert_eq "yes" "$mounted" "-v mount survives restart"

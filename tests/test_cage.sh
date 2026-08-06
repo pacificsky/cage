@@ -967,7 +967,7 @@ test_list_includes_cage_vm_daemon() {
     make_cage_vm_socket
     mock_docker_response "info" 0 ""
     mock_docker_response "ps" 0 ""
-    local out; out="$(DOCKER_HOST= run_cage list)"
+    local out; out="$(DOCKER_HOST='' run_cage list)"
     assert_eq "2" "$(mock_call_count ps)" "ps against both daemons"
     assert_contains "$(mock_env_calls)" "unix://$HOME/.colima/cage/docker.sock ps" "second ps hits cage VM"
     local headers
@@ -982,7 +982,7 @@ test_list_single_daemon_without_cage_vm() {
     mock_uname Darwin
     mock_docker_response "info" 0 ""
     mock_docker_response "ps" 0 ""
-    DOCKER_HOST= run_cage list >/dev/null
+    DOCKER_HOST='' run_cage list >/dev/null
     assert_eq "1" "$(mock_call_count ps)" "one ps when no cage VM socket"
     unmock_uname
 }
@@ -994,7 +994,7 @@ test_obliterate_covers_cage_vm() {
     mock_docker_response "info" 0 ""
     mock_docker_response "ps" 0 ""
     mock_docker_response "volume" 1 ""
-    local out; out="$(DOCKER_HOST= run_cage obliterate 2>&1)"
+    local out; out="$(DOCKER_HOST='' run_cage obliterate 2>&1)"
     assert_eq "2" "$(mock_call_count ps)" "both daemons swept"
     assert_contains "$out" "colima delete --profile cage" "VM removal hint"
     remove_cage_vm_socket
@@ -1008,7 +1008,7 @@ test_rmconfig_covers_cage_vm() {
     mock_docker_response "info" 0 ""
     mock_docker_response "ps" 0 ""
     mock_docker_response "volume" 1 ""
-    DOCKER_HOST= run_cage rmconfig >/dev/null 2>&1
+    DOCKER_HOST='' run_cage rmconfig >/dev/null 2>&1
     assert_eq "2" "$(mock_call_count ps)" "both daemons swept"
     remove_cage_vm_socket
     unmock_uname
@@ -1190,7 +1190,7 @@ test_restart_recreates_from_recorded_image() {
     mock_docker_response "image" 0 ""                         # image present locally
     mock_docker_response "create" 0 ""
     mock_docker_response "start" 0 ""
-    CAGE_IMAGE= run_cage restart >/dev/null 2>&1 || true
+    CAGE_IMAGE='' run_cage restart >/dev/null 2>&1 || true
     local calls; calls="$(mock_calls)"
     assert_contains "$calls" "example.com/img:7" "recreated from recorded image"
     assert_contains "$calls" "cage.image=example.com/img:7" "image label re-recorded"
@@ -1227,7 +1227,7 @@ test_upgrade_targets_recorded_image() {
     mock_docker_response_n "inspect" 7 1 ""                   # gone → create
     mock_docker_response "create" 0 ""
     mock_docker_response "start" 0 ""
-    CAGE_IMAGE= run_cage upgrade >/dev/null 2>&1 || true
+    CAGE_IMAGE='' run_cage upgrade >/dev/null 2>&1 || true
     local calls; calls="$(mock_calls)"
     assert_contains "$calls" "pull example.com/img:7" "pulls the recorded image, not the default"
     assert_not_contains "$calls" "pull ghcr.io/pacificsky" "default image not pulled"
@@ -1241,7 +1241,7 @@ test_restart_hints_when_cage_vm_down() {
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
     local out rc=0
-    out="$(DOCKER_HOST= run_cage restart 2>&1)" || rc=$?
+    out="$(DOCKER_HOST='' run_cage restart 2>&1)" || rc=$?
     assert_eq "1" "$rc" "exit code"
     assert_contains "$out" "No container" "base error kept"
     assert_contains "$out" "colima start --profile cage" "hint to start the cage VM"
@@ -2043,7 +2043,7 @@ test_dstart_macos_project_outside_src_root() {
     mkdir -p "$HOME/src"
     local pdir; pdir="$(mktemp -d)"
     local out rc=0
-    out="$( (cd "$pdir" && DOCKER_HOST= bash "$CAGE_SH" dstart 2>&1) )" || rc=$?
+    out="$( (cd "$pdir" && DOCKER_HOST='' bash "$CAGE_SH" dstart 2>&1) )" || rc=$?
     assert_eq "1" "$rc" "exit code"
     assert_contains "$out" "outside CAGE_SRC_ROOT" "names the actual problem"
     assert_not_contains "$out" "colima delete" "no delete hint when profile absent"
@@ -2059,11 +2059,12 @@ test_dstart_macos_requires_src_root_to_exist() {
     chmod +x "$MOCK_DIR/colima"
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
-    # Default CAGE_SRC_ROOT ($HOME/src) is absent.
-    [ "$HOME" = "$FAKE_HOME" ] && rm -rf "$HOME/src"
+    # Point CAGE_SRC_ROOT at a path that never exists, so the test does
+    # not depend on whether $HOME/src happens to be present.
+    local absent="$MOCK_DIR/no-such-src"
     local pdir; pdir="$(mktemp -d)"
     local out rc=0
-    out="$( (cd "$pdir" && DOCKER_HOST= bash "$CAGE_SH" dstart 2>&1) )" || rc=$?
+    out="$( (cd "$pdir" && DOCKER_HOST='' CAGE_SRC_ROOT="$absent" bash "$CAGE_SH" dstart 2>&1) )" || rc=$?
     assert_eq "1" "$rc" "exit code"
     assert_contains "$out" "does not exist" "explains the missing directory"
     assert_contains "$out" "mkdir -p" "suggests creating it"
@@ -2085,7 +2086,7 @@ test_dstart_macos_src_root_change_hint() {
     mkdir -p "$HOME/src"    # src root exists; project outside it
     local pdir; pdir="$(mktemp -d)"
     local out rc=0
-    out="$( (cd "$pdir" && DOCKER_HOST= bash "$CAGE_SH" dstart 2>&1) )" || rc=$?
+    out="$( (cd "$pdir" && DOCKER_HOST='' bash "$CAGE_SH" dstart 2>&1) )" || rc=$?
     assert_eq "1" "$rc" "exit code"
     assert_contains "$out" "colima delete --profile cage" "delete hint when profile exists"
     rm -rf "$pdir" "$MOCK_DIR/colima"
@@ -2116,7 +2117,7 @@ teardown_dstart_macos() {
 }
 
 run_dstart_macos() {
-    (cd "$DPDIR" && DOCKER_HOST= bash "$CAGE_SH" dstart 2>&1)
+    (cd "$DPDIR" && DOCKER_HOST='' bash "$CAGE_SH" dstart 2>&1)
 }
 
 test_dstart_macos_provisions_vm_first_run() {
@@ -2229,7 +2230,7 @@ test_stop_routes_to_cage_vm() {
     mock_docker_response_n "inspect" 2 0 "exists"  # routing probe finds it in VM
     mock_docker_response_n "inspect" 3 0 "true"    # state after routing: running
     mock_docker_response "stop" 0 ""
-    local out; out="$(DOCKER_HOST= run_cage stop 2>&1)"
+    local out; out="$(DOCKER_HOST='' run_cage stop 2>&1)"
     assert_contains "$out" "Stopping" "container stopped"
     assert_contains "$(mock_env_calls)" "unix://$HOME/.colima/cage/docker.sock stop" "stop ran against cage VM daemon"
     remove_cage_vm_socket
@@ -2246,7 +2247,7 @@ test_status_routes_to_cage_vm() {
     mock_docker_response_n "inspect" 3 0 "true"    # state
     mock_docker_response_n "inspect" 4 0 "colima"  # cage.docker label
     mock_docker_response "port" 0 ""
-    local out; out="$(DOCKER_HOST= run_cage status)"
+    local out; out="$(DOCKER_HOST='' run_cage status)"
     assert_contains "$out" "State:     running" "found the VM container"
     assert_contains "$out" "Docker:    colima" "docker mode from VM container"
     remove_cage_vm_socket
@@ -2259,7 +2260,7 @@ test_no_routing_without_cage_vm_socket() {
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
     local out rc=0
-    out="$(DOCKER_HOST= run_cage stop 2>&1)" || rc=$?
+    out="$(DOCKER_HOST='' run_cage stop 2>&1)" || rc=$?
     assert_eq "1" "$rc" "exit code"
     assert_contains "$out" "No container" "plain not-found error"
     unmock_uname
@@ -2272,7 +2273,7 @@ test_no_routing_on_linux() {
     mock_docker_response "info" 0 ""
     mock_docker_response "inspect" 1 ""
     local out rc=0
-    out="$(DOCKER_HOST= run_cage stop 2>&1)" || rc=$?
+    out="$(DOCKER_HOST='' run_cage stop 2>&1)" || rc=$?
     assert_eq "1" "$rc" "exit code"
     assert_eq "1" "$(mock_call_count inspect)" "no routing probe on Linux"
     remove_cage_vm_socket
@@ -2291,7 +2292,7 @@ test_start_reattaches_via_routing() {
     mock_docker_response_n "inspect" 5 0 "sha256:same"  # image_newer_available
     mock_docker_response "image" 0 "sha256:same"
     mock_docker_response "attach" 0 ""
-    DOCKER_HOST= run_cage start >/dev/null 2>&1 || true
+    DOCKER_HOST='' run_cage start >/dev/null 2>&1 || true
     assert_eq "0" "$(mock_call_count create)" "no new container created"
     assert_contains "$(mock_env_calls)" "unix://$HOME/.colima/cage/docker.sock attach" "attached to VM container"
     remove_cage_vm_socket
@@ -2310,7 +2311,7 @@ test_upgrade_routes_before_pull() {
     mock_docker_response "pull" 0 ""
     mock_docker_response_n "inspect" 5 0 "sha256:same"  # container image id
     mock_docker_response "image" 0 "sha256:same"        # already latest
-    local out; out="$(DOCKER_HOST= run_cage upgrade 2>&1)"
+    local out; out="$(DOCKER_HOST='' run_cage upgrade 2>&1)"
     assert_contains "$out" "already on the latest" "no recreation needed"
     assert_contains "$(mock_env_calls)" "unix://$HOME/.colima/cage/docker.sock pull" "pull ran against cage VM daemon"
     remove_cage_vm_socket

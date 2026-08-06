@@ -141,7 +141,7 @@ The `cage-home` volume is shared across all cage containers and projects. Claude
 
 Cage automatically pulls the latest image when creating a brand-new container (`cage restart` is the exception — it recreates from the container's original image). When re-attaching to an existing container, it warns if a newer version of that container's image is available:
 
-```
+```text
 cage: A newer image is available. Run 'cage upgrade' to upgrade.
 ```
 
