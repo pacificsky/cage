@@ -312,7 +312,7 @@ seed_home() {
     info "Seeding home directory from $seed_dir"
     $DOCKER cp "$seed_dir/." "$name:/tmp/cage-seed"
     $DOCKER start "$name"
-    $DOCKER exec "$name" sh -c 'cp -rn /tmp/cage-seed/. /home/vscode/ && rm -rf /tmp/cage-seed'
+    $DOCKER exec -u root "$name" sh -c 'cp -r --update=none /tmp/cage-seed/. /home/vscode/ && rm -rf /tmp/cage-seed'
     return 0
 }
 
