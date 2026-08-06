@@ -56,10 +56,10 @@ Running `cage start` again from the same directory re-attaches to the existing c
 | `cage dstart` | Like `start`, but docker-enabled (see [Docker inside your cage](#docker-inside-your-cage-multi-service-projects)) |
 | `cage stop` | Stop the container |
 | `cage rm` | Remove the container (volumes preserved) |
-| `cage restart` | Remove and recreate container (volumes preserved) |
+| `cage restart` | Remove and recreate container from its original image (volumes, `-p` ports, and `-v` mounts preserved) |
 | `cage update` | Pull latest container image |
-| `cage upgrade` | Pull latest image and recreate container |
-| `cage status` | Show container name, state, and port mappings |
+| `cage upgrade` | Pull the latest version of the container's image and recreate it if newer |
+| `cage status` | Show container name, state, port mappings, and extra mounts |
 | `cage list` | List all cage containers across projects |
 | `cage shell` | Open an additional shell in a running container |
 | `cage rmconfig` | Stop all containers and remove shared home volume |
@@ -86,7 +86,7 @@ cage list
 # Update to the latest container image
 cage upgrade
 
-# Start fresh (removes container, keeps volumes)
+# Start fresh (removes container; keeps volumes, ports, and mounts)
 cage restart
 ```
 
@@ -116,7 +116,11 @@ cage start -v ~/models:/models:ro -p 3000:3000
 
 Mounting a host path at the *same* absolute path is worth doing where you can. It's why the project directory is mounted that way: paths in error messages, stack traces, and tool output stay valid on both sides.
 
-`-v` only takes effect when a container is created. If one already exists, cage warns and ignores the flag — use `cage rm && cage start -v ...` to apply it. Note that `cage restart` and `cage upgrade` recreate the container *without* your original flags, so mounts you want to keep around belong in a [mount file](#mount-files) instead.
+`-v` only takes effect when a container is created. If one already exists, cage warns and ignores the flag — use `cage rm && cage start -v ...` to apply it.
+
+The `-p` and `-v` flags a container was created with are recorded on it (as `cage.ports` and `cage.volumes` labels), and `cage restart` and `cage upgrade` restore them when they recreate the container — so ports and mounts survive recreation. The image is recorded too (`cage.image`): `cage restart` recreates from the *same* image rather than silently picking up a newer one, and `cage upgrade` pulls the latest version of the *container's* image rather than the current default — so a cage started with `CAGE_IMAGE=docker:cli` stays a `docker:cli` cage. Setting `CAGE_IMAGE` explicitly (e.g. `CAGE_IMAGE=other cage restart`) overrides the recorded image.
+
+`cage rm` is the way to forget all of this: the labels die with the container, and the next `cage start` begins clean. Mounts you want to outlive `cage rm` belong in a [mount file](#mount-files) instead.
 
 ### Injected Environment Variables
 
@@ -135,13 +139,13 @@ The `cage-home` volume is shared across all cage containers and projects. Claude
 
 ### Image Updates
 
-Cage automatically pulls the latest image when creating a new container. When re-attaching to an existing container, it warns if a newer image is available:
+Cage automatically pulls the latest image when creating a brand-new container (`cage restart` is the exception — it recreates from the container's original image). When re-attaching to an existing container, it warns if a newer version of that container's image is available:
 
 ```
 cage: A newer image is available. Run 'cage upgrade' to upgrade.
 ```
 
-`cage update` pulls the latest image. `cage upgrade` pulls and recreates the container.
+`cage update` pulls the latest image. `cage upgrade` pulls the latest version of the image the container was created from and recreates the container if it's actually newer — ports, mounts, and docker mode are preserved across the recreation. `cage restart` deliberately does *not* upgrade: it recreates from the image the container already had.
 
 ## Configuration
 
@@ -204,9 +208,9 @@ cache-vol:/home/vscode/.cache    # named volume
 
 The empty middle field in `path::ro` is what asks for "same path on both sides" while still taking options — Docker rejects an empty container path, so the spelling is unambiguous. Note that `~` expands *only* at the start of a spec: `~/data:~/data:ro` does **not** work, because the container's home is `/home/vscode`, not yours. cage rejects a non-absolute container path with a message pointing at the `::` form rather than letting Docker fail obscurely.
 
-When two mounts share the same container-side path, the more specific one wins: `-v` on the command line beats `.cage.mounts`, which beats the global file. That makes it possible to point a project at a different source for a path the global file already claims.
+When two mounts share the same container-side path, the more specific one wins: `-v` on the command line beats `.cage.mounts`, which beats the global file. That makes it possible to point a project at a different source for a path the global file already claims. This precedence also holds across `cage restart`/`cage upgrade`, which restore the original `-v` flags — so if a mount-file entry for the same container path seems to be ignored, check for a lingering `-v` from the container's creation (`cage rm` clears it).
 
-Mount files are read at container creation time. After changes: `cage rm && cage start`. Unlike `-v` flags, they are re-read on every creation, so mounts declared this way survive `cage restart` and `cage upgrade`.
+Mount files are read at container creation time. After changes: `cage rm && cage start`. Unlike `-v` flags, they are re-read on every creation, so edits to them take effect on the next recreation — and their mounts outlive `cage rm`.
 
 ### Seed Directory
 

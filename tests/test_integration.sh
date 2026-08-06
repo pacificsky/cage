@@ -571,6 +571,52 @@ test_restart_recreates() {
     cleanup_container "$name"
 }
 
+test_restart_preserves_ports_and_volumes() {
+    local pdir; pdir="$(make_project_dir)"
+    local name; name="$(container_name_for "$pdir")"
+    local vdir; vdir="$(make_project_dir)"   # host dir for the -v mount
+
+    start_cage_in "$pdir" start -p 18080:80 -v "$vdir:/cage-extra"
+    $DOCKER stop "$name" >/dev/null 2>&1 || true
+    start_cage_in "$pdir" restart
+
+    # The recreated container should carry both labels forward...
+    local ports_label vols_label
+    ports_label="$($DOCKER inspect -f '{{index .Config.Labels "cage.ports"}}' "$name" 2>/dev/null)" || true
+    vols_label="$($DOCKER inspect -f '{{index .Config.Labels "cage.volumes"}}' "$name" 2>/dev/null)" || true
+    assert_eq "18080:80" "$ports_label" "cage.ports label re-recorded"
+    assert_eq "$vdir:/cage-extra" "$vols_label" "cage.volumes label re-recorded"
+
+    # ...and actually have the port published and the mount present.
+    local ports
+    ports="$($DOCKER port "$name" 2>/dev/null)" || true
+    assert_contains "$ports" "18080" "published port survives restart"
+
+    $DOCKER start "$name" >/dev/null 2>&1 || true
+    local mounted
+    mounted="$($DOCKER exec "$name" sh -c 'test -d /cage-extra && echo yes' 2>/dev/null)" || true
+    assert_eq "yes" "$mounted" "-v mount survives restart"
+
+    cleanup_container "$name"
+}
+
+test_restart_preserves_image() {
+    local pdir; pdir="$(make_project_dir)"
+    local name; name="$(container_name_for "$pdir")"
+
+    start_cage_in "$pdir" start
+    $DOCKER stop "$name" >/dev/null 2>&1 || true
+    # Restart without CAGE_IMAGE in the environment: the image recorded on
+    # the container (ubuntu:24.04) must win over cage's built-in default.
+    (cd "$pdir" && env -u CAGE_IMAGE timeout 10 bash "$CAGE_SH" restart </dev/null 2>&1) || true
+
+    local img
+    img="$($DOCKER ps -a --filter "name=$name" --format '{{.Image}}')" || true
+    assert_contains "$img" "24.04" "recreated from recorded image, not the default"
+
+    cleanup_container "$name"
+}
+
 test_obliterate_removes_all() {
     local pdir1; pdir1="$(make_project_dir)"
     local pdir2; pdir2="$(make_project_dir)"
@@ -698,6 +744,8 @@ main() {
     run_test test_stop_container
     run_test test_rm_container
     run_test test_restart_recreates
+    run_test test_restart_preserves_ports_and_volumes
+    run_test test_restart_preserves_image
 
     echo ""
     echo "--- volumes and mounts ---"

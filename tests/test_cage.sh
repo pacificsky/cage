@@ -484,6 +484,22 @@ test_status_shows_docker_none() {
     unmock_uname
 }
 
+test_status_shows_recorded_config_when_stopped() {
+    mock_reset
+    mock_uname Linux
+    mock_docker_response "info" 0 ""
+    mock_docker_response_n "inspect" 1 0 "false"              # state: stopped
+    mock_docker_response_n "inspect" 2 0 ""                   # cage.docker label
+    mock_docker_response "port" 0 ""                          # nothing bound
+    mock_docker_response_n "inspect" 3 0 "3000:3000 8080:80"  # cage.ports label
+    mock_docker_response_n "inspect" 4 0 "/models:/models"    # cage.volumes label
+    local out; out="$(run_cage status)"
+    assert_contains "$out" "3000:3000 8080:80 (configured" "recorded ports shown for stopped cage"
+    assert_contains "$out" "Mounts:" "mounts section shown"
+    assert_contains "$out" "/models:/models" "recorded mount listed"
+    unmock_uname
+}
+
 test_status_no_docker_line_when_no_container() {
     mock_reset
     mock_uname Linux
@@ -1007,12 +1023,12 @@ test_restart_existing_container() {
     mock_docker_response "info" 0 ""
     # First inspect: container exists (running)
     mock_docker_response_n "inspect" 1 0 "true"
-    # Second inspect: preserve_docker_mode label read → empty (plain cage)
-    mock_docker_response_n "inspect" 2 0 ""
+    # Inspects 2-5: cage.docker / cage.ports / cage.volumes / cage.image
+    # label reads → unmocked, so all empty (plain cage, no recorded config)
     # docker rm -f succeeds
     mock_docker_response "rm" 0 ""
-    # Third inspect in cmd_enter: container gone → create new
-    mock_docker_response_n "inspect" 3 1 ""
+    # Sixth inspect in cmd_enter: container gone → create new
+    mock_docker_response_n "inspect" 6 1 ""
     mock_docker_response "pull" 0 ""
     mock_docker_response "create" 0 ""
     mock_docker_response "start" 0 ""
@@ -1038,8 +1054,9 @@ test_restart_preserves_docker_mode() {
     mock_docker_response "info" 0 ""
     mock_docker_response_n "inspect" 1 0 "true"   # state: exists
     mock_docker_response_n "inspect" 2 0 "host"   # cage.docker label
+    # inspects 3-5 (cage.ports/cage.volumes/cage.image labels): unmocked → empty
     mock_docker_response "rm" 0 ""
-    mock_docker_response_n "inspect" 3 1 ""       # after rm: none → create
+    mock_docker_response_n "inspect" 6 1 ""       # after rm: none → create
     mock_docker_response "pull" 0 ""
     mock_docker_response "create" 0 ""
     mock_docker_response "start" 0 ""
@@ -1058,8 +1075,9 @@ test_restart_plain_container_stays_plain() {
     mock_docker_response "info" 0 ""
     mock_docker_response_n "inspect" 1 0 "true"
     mock_docker_response_n "inspect" 2 0 ""       # no label
+    # inspects 3-5 (cage.ports/cage.volumes/cage.image labels): unmocked → empty
     mock_docker_response "rm" 0 ""
-    mock_docker_response_n "inspect" 3 1 ""
+    mock_docker_response_n "inspect" 6 1 ""
     mock_docker_response "pull" 0 ""
     mock_docker_response "create" 0 ""
     mock_docker_response "start" 0 ""
@@ -1073,6 +1091,164 @@ test_restart_plain_container_stays_plain() {
     unmock_uname
 }
 
+test_start_records_flag_labels() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""   # no container → create
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    run_cage start -p 3000:3000 -p 5432:5432 -v /models:/models >/dev/null 2>&1 || true
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "cage.ports=3000:3000 5432:5432" "ports recorded in label"
+    assert_contains "$calls" "cage.volumes=/models:/models" "volumes recorded in label"
+}
+
+test_start_without_flags_records_no_flag_labels() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    run_cage start >/dev/null 2>&1 || true
+    local calls; calls="$(mock_calls)"
+    assert_not_contains "$calls" "cage.ports=" "no ports label without -p"
+    assert_not_contains "$calls" "cage.volumes=" "no volumes label without -v"
+}
+
+test_restart_restores_ports_and_volumes() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response_n "inspect" 1 0 "true"                 # state: exists
+    mock_docker_response_n "inspect" 2 0 ""                     # cage.docker: plain
+    mock_docker_response_n "inspect" 3 0 "3000:3000 5432:5432"  # cage.ports label
+    # cage.volumes label: newline-delimited, first entry has a space in the path
+    mock_docker_response_n "inspect" 4 0 "/my data:/data
+/models:/models"
+    # inspect 5 (cage.image label): unmocked → empty
+    mock_docker_response "rm" 0 ""
+    mock_docker_response_n "inspect" 6 1 ""                     # gone → create
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    run_cage restart >/dev/null 2>&1 || true
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-p 3000:3000" "first port restored"
+    assert_contains "$calls" "-p 5432:5432" "second port restored"
+    assert_contains "$calls" "-v /my data:/data" "spaced volume restored"
+    assert_contains "$calls" "-v /models:/models" "second volume restored"
+    # Restored flags flow through cmd_enter as CLI flags, so the new
+    # container gets the labels re-recorded and survives the next restart.
+    assert_contains "$calls" "cage.ports=3000:3000 5432:5432" "ports label re-recorded"
+    assert_contains "$calls" "cage.volumes=/my data:/data" "volumes label re-recorded"
+}
+
+test_restart_restored_volume_wins_over_mount_file() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response_n "inspect" 1 0 "true"
+    # inspects 2-3 (cage.docker/cage.ports): unmocked → empty
+    mock_docker_response_n "inspect" 4 0 "/mymodels:/models"    # cage.volumes label
+    # inspect 5 (cage.image label): unmocked → empty
+    mock_docker_response "rm" 0 ""
+    mock_docker_response_n "inspect" 6 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+
+    local project_dir; project_dir="$(mktemp -d)"
+    echo "/other:/models" > "$project_dir/.cage.mounts"
+
+    (cd "$project_dir" && run_cage restart >/dev/null 2>&1 || true)
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "-v /mymodels:/models" "restored -v applied"
+    assert_not_contains "$calls" "/other:/models" "mount file entry for same target skipped"
+
+    rm -rf "$project_dir"
+}
+
+test_start_records_image_label() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""   # no container → create
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    CAGE_IMAGE="example.com/custom:1" run_cage start >/dev/null 2>&1 || true
+    assert_contains "$(mock_calls)" "cage.image=example.com/custom:1" "image recorded in label"
+}
+
+test_restart_recreates_from_recorded_image() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response_n "inspect" 1 0 "true"               # state: exists
+    # inspects 2-4 (cage.docker/cage.ports/cage.volumes): unmocked → empty
+    mock_docker_response_n "inspect" 5 0 "example.com/img:7"  # cage.image label
+    mock_docker_response "rm" 0 ""
+    mock_docker_response_n "inspect" 6 1 ""                   # gone → create
+    mock_docker_response "image" 0 ""                         # image present locally
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    CAGE_IMAGE= run_cage restart >/dev/null 2>&1 || true
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "example.com/img:7" "recreated from recorded image"
+    assert_contains "$calls" "cage.image=example.com/img:7" "image label re-recorded"
+    assert_eq "0" "$(mock_call_count pull)" "no pull when restoring recorded image"
+}
+
+test_restart_env_image_overrides_recorded() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response_n "inspect" 1 0 "true"
+    # inspects 2-4: unmocked → empty
+    mock_docker_response_n "inspect" 5 0 "example.com/img:7"  # cage.image (read, then outranked)
+    mock_docker_response "rm" 0 ""
+    mock_docker_response_n "inspect" 6 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    CAGE_IMAGE="example.com/override:2" run_cage restart >/dev/null 2>&1 || true
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "cage.image=example.com/override:2" "explicit CAGE_IMAGE wins"
+    assert_eq "1" "$(mock_call_count pull)" "explicit image is pulled"
+}
+
+test_upgrade_targets_recorded_image() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response_n "inspect" 1 0 "true"               # state
+    mock_docker_response_n "inspect" 2 0 "example.com/img:7"  # cage.image label
+    mock_docker_response "pull" 0 ""
+    mock_docker_response_n "inspect" 3 0 "sha256:old"         # container image id
+    mock_docker_response "image" 0 "sha256:new"               # newer available
+    # inspects 4-6 (cage.docker/cage.ports/cage.volumes): unmocked → empty
+    mock_docker_response "rm" 0 ""
+    mock_docker_response_n "inspect" 7 1 ""                   # gone → create
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    CAGE_IMAGE= run_cage upgrade >/dev/null 2>&1 || true
+    local calls; calls="$(mock_calls)"
+    assert_contains "$calls" "pull example.com/img:7" "pulls the recorded image, not the default"
+    assert_not_contains "$calls" "pull ghcr.io/pacificsky" "default image not pulled"
+    assert_eq "1" "$(mock_call_count pull)" "single pull (cmd_enter skips the re-pull)"
+}
+
+test_restart_hints_when_cage_vm_down() {
+    mock_reset
+    mock_uname Darwin
+    mkdir -p "$HOME/.colima/cage"      # VM profile exists, but no socket
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    local out rc=0
+    out="$(DOCKER_HOST= run_cage restart 2>&1)" || rc=$?
+    assert_eq "1" "$rc" "exit code"
+    assert_contains "$out" "No container" "base error kept"
+    assert_contains "$out" "colima start --profile cage" "hint to start the cage VM"
+    rm -rf "$HOME/.colima"
+    unmock_uname
+}
+
 test_upgrade_preserves_docker_mode() {
     mock_reset
     mock_uname Linux
@@ -1080,11 +1256,13 @@ test_upgrade_preserves_docker_mode() {
     mock_docker_response "info" 0 ""
     mock_docker_response "pull" 0 ""
     mock_docker_response_n "inspect" 1 0 "true"        # state
-    mock_docker_response_n "inspect" 2 0 "sha256:old"  # container image id
+    # inspect 2 (cage.image label): unmocked → empty → default image kept
+    mock_docker_response_n "inspect" 3 0 "sha256:old"  # container image id
     mock_docker_response "image" 0 "sha256:new"        # newer available
-    mock_docker_response_n "inspect" 3 0 "host"        # label
+    mock_docker_response_n "inspect" 4 0 "host"        # cage.docker label
+    # inspects 5-6 (cage.ports/cage.volumes labels): unmocked → empty
     mock_docker_response "rm" 0 ""
-    mock_docker_response_n "inspect" 4 1 ""            # gone → create
+    mock_docker_response_n "inspect" 7 1 ""            # gone → create
     mock_docker_response "create" 0 ""
     mock_docker_response "start" 0 ""
     run_cage upgrade >/dev/null 2>&1 || true
@@ -1180,14 +1358,16 @@ test_upgrade_pulls_and_recreates_when_newer() {
     mock_docker_response "pull" 0 ""
     # First inspect: container exists (running)
     mock_docker_response_n "inspect" 1 0 "true"
+    # inspect 2 (cage.image label): unmocked → empty → default image kept
     # image inspect returns different ID → newer available
-    mock_docker_response_n "inspect" 2 0 "sha256:old"
+    mock_docker_response_n "inspect" 3 0 "sha256:old"
     mock_docker_response "image" 0 "sha256:new"
-    # preserve_docker_mode label read → empty (plain cage)
-    mock_docker_response_n "inspect" 3 0 ""
+    # Inspects 4-6: cage.docker / cage.ports / cage.volumes label reads →
+    # empty (plain cage, no recorded flags)
+    mock_docker_response_n "inspect" 4 0 ""
     mock_docker_response "rm" 0 ""
     # After rm, cmd_enter inspect: container gone → create new
-    mock_docker_response_n "inspect" 4 1 ""
+    mock_docker_response_n "inspect" 7 1 ""
     mock_docker_response "create" 0 ""
     mock_docker_response "start" 0 ""
     local out; out="$(run_cage upgrade 2>&1)"
@@ -1204,8 +1384,9 @@ test_upgrade_pulls_no_recreate_when_current() {
     mock_docker_response "pull" 0 ""
     # Container exists (running)
     mock_docker_response_n "inspect" 1 0 "true"
+    # inspect 2 (cage.image label): unmocked → empty → default image kept
     # image_newer_available: container image and latest image are same
-    mock_docker_response_n "inspect" 2 0 "sha256:same"
+    mock_docker_response_n "inspect" 3 0 "sha256:same"
     mock_docker_response "image" 0 "sha256:same"
     local out; out="$(run_cage upgrade 2>&1)"
     assert_contains "$out" "Pulling latest image" "pulls image"
@@ -1781,8 +1962,9 @@ test_dstart_existing_nondocker_reattaches_with_info() {
     mock_docker_response_n "inspect" 2 0 ""
     # cmd_enter: state check → running
     mock_docker_response_n "inspect" 3 0 "true"
-    # cmd_enter: image_newer_available container image id
-    mock_docker_response_n "inspect" 4 0 "sha256:same"
+    # cmd_enter: inspect 4 = cage.image label (unmocked → empty), then
+    # image_newer_available container image id
+    mock_docker_response_n "inspect" 5 0 "sha256:same"
     mock_docker_response "image" 0 "sha256:same"
     mock_docker_response "attach" 0 ""
     local out; out="$(run_cage dstart 2>&1)"
@@ -2081,12 +2263,32 @@ test_start_reattaches_via_routing() {
     mock_docker_response_n "inspect" 1 1 ""        # not in default daemon
     mock_docker_response_n "inspect" 2 0 "exists"  # probe
     mock_docker_response_n "inspect" 3 0 "true"    # state: running
-    mock_docker_response_n "inspect" 4 0 "sha256:same"  # image_newer_available
+    # inspect 4 (cage.image label): unmocked → empty
+    mock_docker_response_n "inspect" 5 0 "sha256:same"  # image_newer_available
     mock_docker_response "image" 0 "sha256:same"
     mock_docker_response "attach" 0 ""
     DOCKER_HOST= run_cage start >/dev/null 2>&1 || true
     assert_eq "0" "$(mock_call_count create)" "no new container created"
     assert_contains "$(mock_env_calls)" "unix://$HOME/.colima/cage/docker.sock attach" "attached to VM container"
+    remove_cage_vm_socket
+    unmock_uname
+}
+
+test_upgrade_routes_before_pull() {
+    mock_reset
+    mock_uname Darwin
+    make_cage_vm_socket
+    mock_docker_response "info" 0 ""
+    mock_docker_response_n "inspect" 1 1 ""             # not in default daemon
+    mock_docker_response_n "inspect" 2 0 "exists"       # probe finds it in VM
+    mock_docker_response_n "inspect" 3 0 "true"         # state (routed)
+    # inspect 4 (cage.image label): unmocked → empty
+    mock_docker_response "pull" 0 ""
+    mock_docker_response_n "inspect" 5 0 "sha256:same"  # container image id
+    mock_docker_response "image" 0 "sha256:same"        # already latest
+    local out; out="$(DOCKER_HOST= run_cage upgrade 2>&1)"
+    assert_contains "$out" "already on the latest" "no recreation needed"
+    assert_contains "$(mock_env_calls)" "unix://$HOME/.colima/cage/docker.sock pull" "pull ran against cage VM daemon"
     remove_cage_vm_socket
     unmock_uname
 }
@@ -2442,6 +2644,7 @@ main() {
     run_test test_status_no_ports_when_none
     run_test test_status_shows_docker_host
     run_test test_status_shows_docker_none
+    run_test test_status_shows_recorded_config_when_stopped
     run_test test_status_no_docker_line_when_no_container
 
     echo ""
@@ -2516,6 +2719,15 @@ main() {
     run_test test_restart_no_container
     run_test test_restart_preserves_docker_mode
     run_test test_restart_plain_container_stays_plain
+    run_test test_start_records_flag_labels
+    run_test test_start_without_flags_records_no_flag_labels
+    run_test test_restart_restores_ports_and_volumes
+    run_test test_restart_restored_volume_wins_over_mount_file
+    run_test test_start_records_image_label
+    run_test test_restart_recreates_from_recorded_image
+    run_test test_restart_env_image_overrides_recorded
+    run_test test_upgrade_targets_recorded_image
+    run_test test_restart_hints_when_cage_vm_down
     run_test test_upgrade_preserves_docker_mode
     run_test test_dstart_warns_when_image_lacks_docker_cli
     run_test test_dstart_no_warning_when_docker_cli_present
@@ -2597,6 +2809,7 @@ main() {
     run_test test_no_routing_without_cage_vm_socket
     run_test test_no_routing_on_linux
     run_test test_start_reattaches_via_routing
+    run_test test_upgrade_routes_before_pull
 
     echo ""
     echo "--- mount file support ---"

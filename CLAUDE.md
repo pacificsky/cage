@@ -38,11 +38,12 @@ Deterministic: `cage-<dirname>-<8char-sha256-of-absolute-path>`. Example: `/User
 - `cage.sh rm` — stop and remove container
 - `cage.sh rmconfig` — stop all containers and remove shared home volume
 - `cage.sh obliterate` — remove all cage containers and shared home volume
-- `cage.sh status` — show state and ports
+- `cage.sh status` — show state, ports (recorded config when stopped), and extra mounts
 - `cage.sh list` — list all cage containers
 - `cage.sh shell` — open additional shell in running container
-- `cage.sh restart` — remove and recreate container (volumes preserved)
-- `cage.sh update` — pull latest image and recreate container
+- `cage.sh restart` — remove and recreate container from its original image (volumes, `-p` ports, and `-v` mounts preserved; never moves to a newer image)
+- `cage.sh update` — pull latest image (no container changes)
+- `cage.sh upgrade` — pull the latest version of the container's recorded image and recreate only if newer
 
 ### Environment Variables
 
@@ -82,7 +83,21 @@ One `docker -v` spec per line. Blank lines and lines starting with `#` are ignor
 
 `cmd_enter` rejects a non-absolute container target with a message pointing at the `::` form. That check lives in `cmd_enter`, not `read_mounts_file`, because the latter runs inside a process substitution where `die` could not halt the run.
 
-Precedence when two mounts share a container-side target: command-line `-v` > `.cage.mounts` > global file. `build_mount_args` resolves this by walking the collected specs back to front and skipping targets already claimed. Unlike `-v` flags, mount files are re-read on every container creation, so they survive `restart` and `upgrade`.
+Precedence when two mounts share a container-side target: command-line `-v` > `.cage.mounts` > global file. `build_mount_args` resolves this by walking the collected specs back to front and skipping targets already claimed. Mount files are re-read on every container creation, so edits take effect on the next recreation and their mounts outlive `cage rm`; CLI `-v` flags are instead preserved verbatim via labels (see below), so a restored `-v` keeps its top precedence and can shadow a later mount-file edit until `cage rm`.
+
+### Container Labels
+
+Every label is set at `docker create` time and dies with the container (`cage rm` = forget config; `restart`/`upgrade` = preserve it):
+
+- `cage.project=$PROJECT_DIR` — identifies cage containers for `list`
+- `cage.docker=host|colima` — docker-enabled mode, restored by `preserve_docker_mode`
+- `cage.ports` — the `-p` specs the container was created with, space-delimited (a port spec cannot contain a space)
+- `cage.volumes` — the `-v` specs, newline-delimited (a host path can contain a space)
+- `cage.image` — the image ref the container was created from, restored by `preserve_image` (an explicit `CAGE_IMAGE` env var outranks it)
+
+`restart`/`upgrade` call `preserve_cli_flags` (before `docker rm -f`) to read `cage.ports`/`cage.volumes` via `container_label` into `CAGE_RESTORED_FLAGS`, then pass them back to `cmd_enter` as ordinary CLI flags — which also re-records the labels on the new container, so the chain survives repeated recreations. The `{{index .Config.Labels ...}}` inspect template works on both Docker and Podman.
+
+The image split: `restart` restores `cage.image` and recreates *without pulling* (`CAGE_RESTORED_IMAGE` suppresses `cmd_enter`'s pull unless the image is missing locally) — a pure "give me back what I had". `upgrade` restores `cage.image`, pulls the latest of *that* ref, and recreates only if `image_newer_available` — the only command that moves a container to a newer image. The re-attach "newer image" hint in `cmd_enter` also checks against the recorded image so it agrees with what `upgrade` would do. `cmd_status` falls back to `cage.ports` when `docker port` reports nothing (stopped container) and lists `cage.volumes` as a `Mounts:` section.
 
 ### Testing
 
@@ -95,7 +110,7 @@ Precedence when two mounts share a container-side target: command-line `-v` > `.
 
 - **Linux (`host`)**: mounts the host docker socket into the cage (trusted — a red warning banner is printed). Not contained.
 - **macOS (`colima`)**: provisions a dedicated colima VM (profile `cage`) via `setup_colima_cage`, mounting only `CAGE_SRC_ROOT`. `DOCKER_HOST` is retargeted to `~/.colima/cage/docker.sock` (`COLIMA_CAGE_SOCK`) so all docker commands for that cage hit the VM's daemon.
-- **Cross-daemon routing**: `route_to_container` locates which daemon owns a container so `stop`/`status`/`shell`/etc. reach the cage VM's daemon on macOS.
+- **Cross-daemon routing**: `route_to_container` locates which daemon owns a container so `stop`/`status`/`shell`/etc. reach the cage VM's daemon on macOS. `cmd_upgrade` routes *before* pulling so the pull lands on the daemon that owns the container. When a colima cage VM exists but is down, `cage_vm_down_hint` appends a "colima start --profile cage" hint to "No container" errors (`stop`/`rm`/`restart`/`status`/`upgrade`).
 - **Mode preservation**: `preserve_docker_mode` reads the `cage.docker` label so `restart`/`upgrade` recreate the container in the same mode.
 - **Multi-daemon housekeeping**: `list`/`obliterate`/`rmconfig` iterate both daemons; macOS teardown suggests `colima delete --profile cage`.
 - `status` prints a `Docker: host|colima|none` line. `check_docker_cli_in_image` warns (non-fatally) if the image lacks the docker CLI.
@@ -104,6 +119,7 @@ Precedence when two mounts share a container-side target: command-line `-v` > `.
 
 - CWD = project dir (no git-root detection)
 - Docker label `cage.project=$PROJECT_DIR` on each container for listing
-- Port flags (`-p`) collected before subcommand, forwarded to `docker create`
+- Port/volume flags (`-p`/`-v`) parsed after `start`/`dstart`, forwarded to `docker create`, and recorded in `cage.ports`/`cage.volumes` labels so `restart`/`upgrade` restore them; the image is likewise recorded in `cage.image`
+- `restart` = same image, fresh container; `upgrade` = latest of the recorded image, fresh container only if newer
 - Re-attach: running → attach, stopped → start -ai, none → create + seed + start
 - Runtime detection: prefers `docker`, falls back to `podman`; all commands use `$DOCKER` variable
