@@ -184,8 +184,9 @@ cleanup_all() {
         cleanup_container "$name"
         rm -rf "$d"
     done
-    # Remove the shared home volume used by tests.
+    # Remove the shared volumes used by tests.
     $DOCKER volume rm cage-home >/dev/null 2>&1 || true
+    $DOCKER volume rm cage-brew >/dev/null 2>&1 || true
 }
 
 # ================================================================
@@ -274,6 +275,33 @@ test_shared_home_volume_persists() {
     local content
     content="$($DOCKER exec "$name" cat /home/vscode/persist.txt 2>/dev/null)" || true
     assert_eq "persist-test" "$content" "file persists across container recreate"
+
+    cleanup_container "$name"
+}
+
+test_brew_volume_mounted_and_persists() {
+    local pdir; pdir="$(make_project_dir)"
+    local name; name="$(container_name_for "$pdir")"
+
+    start_cage_in "$pdir" start
+    $DOCKER start "$name" >/dev/null 2>&1 || true
+    local mounted
+    mounted="$($DOCKER exec "$name" sh -c 'test -d /home/linuxbrew && echo yes' 2>/dev/null)" || true
+    assert_eq "yes" "$mounted" "/home/linuxbrew mounted"
+
+    local vol
+    vol="$($DOCKER volume inspect cage-brew --format '{{.Name}}' 2>/dev/null)" || true
+    assert_eq "cage-brew" "$vol" "cage-brew volume auto-created"
+
+    # Volume content survives container removal (ownership handling is the
+    # image's job — the test image has no brew shim, so root-written is fine).
+    $DOCKER exec -u 0 "$name" sh -c 'echo kept > /home/linuxbrew/persist.txt' 2>/dev/null || true
+    run_cage_in "$pdir" rm || true
+    start_cage_in "$pdir" start
+    $DOCKER start "$name" >/dev/null 2>&1 || true
+    local content
+    content="$($DOCKER exec "$name" cat /home/linuxbrew/persist.txt 2>/dev/null)" || true
+    assert_eq "kept" "$content" "brew volume content survives cage rm"
 
     cleanup_container "$name"
 }
@@ -778,6 +806,7 @@ main() {
     echo "--- volumes and mounts ---"
     run_test test_project_dir_mounted
     run_test test_shared_home_volume_persists
+    run_test test_brew_volume_mounted_and_persists
 
     echo ""
     echo "--- seed directory ---"

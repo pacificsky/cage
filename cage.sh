@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.11.0"
+VERSION="0.12.0"
 IMAGE="${CAGE_IMAGE:-ghcr.io/pacificsky/devcontainer-lite:latest}"
 HOME_VOL="cage-home"
+BREW_VOL="cage-brew"
 COLIMA_PROFILE="cage"
 COLIMA_CAGE_SOCK="$HOME/.colima/cage/docker.sock"
 CAGE_DOCKER_MODE=""   # "", "host", or "colima" — set by dstart / preserve_docker_mode
@@ -492,9 +493,14 @@ cmd_enter() {
             fi
             info "Creating $name"
 
+            # Ownership of a fresh cage-brew volume comes from the image:
+            # devcontainer-lite ships /home/linuxbrew owned by vscode, so
+            # copy-on-first-use hands the volume over, and its brew shim
+            # chowns as a fallback.  cage just mounts and persists it.
             local -a mount_args=(
                 -v "${project_dir}:${project_dir}"
                 -v "${HOME_VOL}:/home/vscode"
+                -v "${BREW_VOL}:/home/linuxbrew"
             )
 
             # Extra mounts declared in ~/.config/cage/mounts and .cage.mounts.
@@ -751,6 +757,17 @@ cage_vm_daemon_reachable() {
     [ -S "$COLIMA_CAGE_SOCK" ]
 }
 
+# Remove one of cage's shared named volumes, reporting either way.
+remove_shared_volume() {
+    local vol="$1" desc="$2"
+    if $DOCKER volume inspect "$vol" >/dev/null 2>&1; then
+        info "Removing shared $desc volume $vol"
+        $DOCKER volume rm "$vol"
+    else
+        info "No shared $desc volume to remove"
+    fi
+}
+
 rmconfig_daemon() {
     local ids
     ids="$($DOCKER ps -a --filter "label=cage.project" -q)" || true
@@ -762,12 +779,8 @@ rmconfig_daemon() {
             echo "$running" | xargs $DOCKER stop
         fi
     fi
-    if $DOCKER volume inspect "$HOME_VOL" >/dev/null 2>&1; then
-        info "Removing shared home volume $HOME_VOL"
-        $DOCKER volume rm "$HOME_VOL"
-    else
-        info "No shared home volume to remove"
-    fi
+    remove_shared_volume "$HOME_VOL" home
+    remove_shared_volume "$BREW_VOL" brew
 }
 
 obliterate_daemon() {
@@ -779,12 +792,8 @@ obliterate_daemon() {
     else
         info "No cage containers to remove"
     fi
-    if $DOCKER volume inspect "$HOME_VOL" >/dev/null 2>&1; then
-        info "Removing shared home volume $HOME_VOL"
-        $DOCKER volume rm "$HOME_VOL"
-    else
-        info "No shared home volume to remove"
-    fi
+    remove_shared_volume "$HOME_VOL" home
+    remove_shared_volume "$BREW_VOL" brew
 }
 
 cmd_rmconfig() {
@@ -1049,8 +1058,8 @@ Commands:
   restart   Remove and recreate container from its original image, without
             updating it — use 'upgrade' for that (shared home volume,
             -p ports, and -v mounts preserved)
-  obliterate Destroy shared home volume and all cage containers (caution!!!)
-  rmconfig  Stop all containers and remove shared home volume (containers are preserved, but will be recreated with fresh home on next start)
+  obliterate Destroy shared volumes (home, brew) and all cage containers (caution!!!)
+  rmconfig  Stop all containers and remove shared volumes (home, brew); containers are preserved, but will be recreated with fresh home on next start
   update    Pull latest container image
   upgrade   Pull the latest version of the container's image and recreate
             it if newer (ports, mounts, and docker mode preserved)

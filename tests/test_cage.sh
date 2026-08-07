@@ -14,6 +14,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CAGE_SH="$REPO_DIR/cage.sh"
 
+# Hermetic against the caller's environment: cage_config_get gives env vars
+# top precedence, so ambient values — e.g. when the suite runs inside a cage
+# whose env file injected CAGE_VM_* — would silently change provisioning
+# args and image choices. Tests that need one set it explicitly per call.
+unset CAGE_IMAGE CAGE_SRC_ROOT CAGE_VM_CPU CAGE_VM_MEMORY CAGE_VM_DISK
+unset DOCKER_HOST DOCKER_CONTEXT
+
 # ================================================================
 # Minimal test framework
 # ================================================================
@@ -352,13 +359,13 @@ test_help_long_flag() {
     local out; out="$(run_cage --help)";  assert_contains "$out" "Usage:"
 }
 test_version_V() {
-    local out; out="$(run_cage -V)";      assert_contains "$out" "cage 0.11.0"
+    local out; out="$(run_cage -V)";      assert_contains "$out" "cage 0.12.0"
 }
 test_version_long() {
-    local out; out="$(run_cage --version)"; assert_contains "$out" "cage 0.11.0"
+    local out; out="$(run_cage --version)"; assert_contains "$out" "cage 0.12.0"
 }
 test_version_command() {
-    local out; out="$(run_cage version)"; assert_contains "$out" "cage 0.11.0"
+    local out; out="$(run_cage version)"; assert_contains "$out" "cage 0.12.0"
 }
 test_help_mentions_dstart() {
     local out; out="$(run_cage help)"
@@ -2377,8 +2384,9 @@ test_start_no_mounts_files() {
 
     (cd "$project_dir" && run_cage start >/dev/null 2>&1 || true)
     local calls; calls="$(mock_calls)"
-    # Only cage's own two mounts (project dir and shared home) should appear.
-    assert_eq "2" "$(grep -o -- '-v ' <<<"$calls" | wc -l | tr -d ' ')" \
+    # Only cage's own three mounts (project dir, shared home, brew volume)
+    # should appear.
+    assert_eq "3" "$(grep -o -- '-v ' <<<"$calls" | wc -l | tr -d ' ')" \
         "no extra -v flags when mount files absent"
 
     rm -rf "$project_dir"
@@ -2392,7 +2400,7 @@ test_start_mounts_file_ignores_comments_and_blanks() {
     local calls; calls="$(mock_calls)"
     assert_contains "$calls" "-v /data:/data" "spec is read despite surrounding noise"
     assert_not_contains "$calls" "a comment" "comment not passed to docker"
-    assert_eq "3" "$(grep -o -- '-v ' <<<"$calls" | wc -l | tr -d ' ')" \
+    assert_eq "4" "$(grep -o -- '-v ' <<<"$calls" | wc -l | tr -d ' ')" \
         "blank lines produce no mounts"
 
     rm -rf "$project_dir"
@@ -2799,6 +2807,48 @@ test_restart_reapplies_ports_files() {
 
 
 # ================================================================
+# Tests: brew volume
+# ================================================================
+
+test_start_mounts_brew_volume() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    run_cage start >/dev/null 2>&1 || true
+    assert_contains "$(mock_calls)" "-v cage-brew:/home/linuxbrew" "brew volume mounted"
+}
+
+# Ownership of a fresh brew volume is the image's job (devcontainer-lite
+# ships /home/linuxbrew owned by vscode; copy-on-first-use propagates it,
+# and its brew shim chowns as a fallback) — cage only mounts the volume,
+# so there is deliberately no volume-init logic to test here.
+test_start_never_preinitializes_brew_volume() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "inspect" 1 ""
+    mock_docker_response "pull" 0 ""
+    mock_docker_response "create" 0 ""
+    mock_docker_response "start" 0 ""
+    run_cage start >/dev/null 2>&1 || true
+    local calls; calls="$(mock_calls)"
+    assert_not_contains "$calls" "volume create" "no explicit volume create"
+    assert_eq "0" "$(mock_call_count run)" "no ownership-fixup container"
+}
+
+test_rmconfig_removes_brew_volume() {
+    mock_reset
+    mock_docker_response "info" 0 ""
+    mock_docker_response "ps" 0 ""
+    mock_docker_response "volume" 0 ""
+    local out; out="$(run_cage rmconfig 2>&1)"
+    assert_contains "$out" "Removing shared brew volume" "brew volume removed"
+    assert_contains "$(mock_calls)" "volume rm cage-brew" "volume rm issued"
+}
+
+# ================================================================
 # Run all tests
 # ================================================================
 
@@ -3048,6 +3098,12 @@ main() {
     run_test test_start_ports_file_not_recorded_in_label
     run_test test_reattach_does_not_use_ports_files
     run_test test_restart_reapplies_ports_files
+
+    echo ""
+    echo "--- brew volume ---"
+    run_test test_start_mounts_brew_volume
+    run_test test_start_never_preinitializes_brew_volume
+    run_test test_rmconfig_removes_brew_volume
 
     print_summary
 }
