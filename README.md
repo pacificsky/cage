@@ -62,8 +62,8 @@ Running `cage start` again from the same directory re-attaches to the existing c
 | `cage status` | Show container name, state, port mappings, and extra mounts |
 | `cage list` | List all cage containers across projects |
 | `cage shell` | Open an additional shell in a running container |
-| `cage rmconfig` | Stop all containers and remove shared home volume |
-| `cage obliterate` | Remove all cage containers and shared home volume |
+| `cage rmconfig` | Stop all containers and remove the shared volumes (home, brew) |
+| `cage obliterate` | Remove all cage containers and the shared volumes (home, brew) |
 
 ## Examples
 
@@ -98,6 +98,7 @@ cage restart
 |------|-----------|---------|
 | Project directory | Same absolute path | Code editing, matching error paths |
 | `cage-home` (Docker volume) | `/home/vscode` | Shared home dir across all cages |
+| `cage-brew` (Docker volume) | `/home/linuxbrew` | Persistent Homebrew prefix shared across all cages |
 | SSH agent socket | `/run/host-services/ssh-auth.sock` (macOS) or `/tmp/ssh-agent.sock` (Linux) | SSH agent forwarding |
 
 On macOS, cage uses Docker Desktop's / Colima's SSH agent proxy. On Linux, it bind-mounts `$SSH_AUTH_SOCK` directly. `SSH_AUTH_SOCK` is set inside the container to match.
@@ -137,7 +138,9 @@ These are set automatically on every container:
 
 The `cage-home` volume is shared across all cage containers and projects. Claude credentials, git config, shell history, and tool state all live here — configure once, share everywhere.
 
-One exception: named volumes are per-daemon, and on macOS docker-enabled cages live in the cage VM's daemon — so they share a *separate* `cage-home` among themselves, not the one your plain cages use. See [Docker inside your cage](#docker-inside-your-cage-multi-service-projects).
+The `cage-brew` volume works the same way for Homebrew: the image's `brew` shim installs Homebrew into `/home/linuxbrew/.linuxbrew` on first use, and because that prefix lives on the shared volume, `brew install`s persist across containers, projects, and image upgrades. Ownership is handled by the image (it ships `/home/linuxbrew` owned by `vscode`, and the shim chowns as a fallback).
+
+One exception: named volumes are per-daemon, and on macOS docker-enabled cages live in the cage VM's daemon — so they share *separate* `cage-home` and `cage-brew` volumes among themselves, not the ones your plain cages use. See [Docker inside your cage](#docker-inside-your-cage-multi-service-projects).
 
 ### Image Updates
 

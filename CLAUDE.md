@@ -27,6 +27,7 @@ Deterministic: `cage-<dirname>-<8char-sha256-of-absolute-path>`. Example: `/User
 |------|-----------|------|---------|
 | `$PROJECT_DIR` | `$PROJECT_DIR` | rw | Same absolute path — error messages match host |
 | `cage-home` (shared Docker volume) | `/home/vscode` | rw | Shared home dir across all cages (Claude config, creds, shell state) |
+| `cage-brew` (shared Docker volume) | `/home/linuxbrew` | rw | Persistent Homebrew prefix; ownership comes from the image (baked-in vscode-owned dir + brew shim chown fallback), cage only mounts it |
 | SSH agent socket | `/run/host-services/ssh-auth.sock` | rw | SSH agent forwarding (Docker Desktop) |
 
 ### Subcommands
@@ -36,8 +37,8 @@ Deterministic: `cage-<dirname>-<8char-sha256-of-absolute-path>`. Example: `/User
 - `cage.sh dstart` — docker-enabled start (Linux: host socket; macOS: colima `cage` VM)
 - `cage.sh stop` — stop container
 - `cage.sh rm` — stop and remove container
-- `cage.sh rmconfig` — stop all containers and remove shared home volume
-- `cage.sh obliterate` — remove all cage containers and shared home volume
+- `cage.sh rmconfig` — stop all containers and remove the shared volumes (home, brew)
+- `cage.sh obliterate` — remove all cage containers and the shared volumes (home, brew)
 - `cage.sh status` — show state, ports (recorded config when stopped), and extra mounts
 - `cage.sh list` — list all cage containers
 - `cage.sh shell` — open additional shell in running container
@@ -120,7 +121,7 @@ The image split: `restart` restores `cage.image` and recreates *without pulling*
 `cage dstart` creates a container that can run docker/compose. Mode is a creation-time property recorded via the `cage.docker` label (`host` or `colima`).
 
 - **Linux (`host`)**: mounts the host docker socket into the cage (trusted — a red warning banner is printed). Not contained.
-- **macOS (`colima`)**: provisions a dedicated colima VM (profile `cage`) via `setup_colima_cage`, mounting only `CAGE_SRC_ROOT`. It validates up front that `CAGE_SRC_ROOT` exists (a missing root gets a "create it or set CAGE_SRC_ROOT" error, checked before the project-inside-root check so a typo'd config root isn't reported as "move the project"). Named volumes are per-daemon, so VM-resident cages share a *separate* `cage-home` from plain cages — the first dstart starts with a fresh (seeded) home, and `rmconfig`/`obliterate` remove the volume on both daemons. `DOCKER_HOST` is retargeted to `~/.colima/cage/docker.sock` (`COLIMA_CAGE_SOCK`) so all docker commands for that cage hit the VM's daemon.
+- **macOS (`colima`)**: provisions a dedicated colima VM (profile `cage`) via `setup_colima_cage`, mounting only `CAGE_SRC_ROOT`. It validates up front that `CAGE_SRC_ROOT` exists (a missing root gets a "create it or set CAGE_SRC_ROOT" error, checked before the project-inside-root check so a typo'd config root isn't reported as "move the project"). Named volumes are per-daemon, so VM-resident cages share *separate* `cage-home`/`cage-brew` volumes from plain cages — the first dstart starts with a fresh (seeded) home, and `rmconfig`/`obliterate` remove the volumes on both daemons. `DOCKER_HOST` is retargeted to `~/.colima/cage/docker.sock` (`COLIMA_CAGE_SOCK`) so all docker commands for that cage hit the VM's daemon.
 - **Cross-daemon routing**: `route_to_container` locates which daemon owns a container so `stop`/`status`/`shell`/etc. reach the cage VM's daemon on macOS. `cmd_upgrade` routes *before* pulling so the pull lands on the daemon that owns the container. When a colima cage VM exists but is down, `cage_vm_down_hint` appends a "colima start --profile cage" hint to "No container" errors (`stop`/`rm`/`restart`/`status`/`upgrade`).
 - **Mode preservation**: `preserve_docker_mode` reads the `cage.docker` label so `restart`/`upgrade` recreate the container in the same mode.
 - **Multi-daemon housekeeping**: `list`/`obliterate`/`rmconfig` iterate both daemons; macOS teardown suggests `colima delete --profile cage`.
