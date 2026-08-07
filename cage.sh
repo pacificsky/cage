@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.10.0"
+VERSION="0.11.0"
 IMAGE="${CAGE_IMAGE:-ghcr.io/pacificsky/devcontainer-lite:latest}"
 HOME_VOL="cage-home"
 COLIMA_PROFILE="cage"
 COLIMA_CAGE_SOCK="$HOME/.colima/cage/docker.sock"
 CAGE_DOCKER_MODE=""   # "", "host", or "colima" — set by dstart / preserve_docker_mode
+CAGE_RESTORED_FLAGS=() # -p/-v flags restored from labels by preserve_cli_flags
+CAGE_RESTORED_IMAGE="" # non-empty when IMAGE was restored from a cage.image label
 
 # Detect container runtime: prefer docker, fall back to podman.
 if command -v docker &>/dev/null; then
@@ -95,12 +97,17 @@ docker_socket_gid() {
     fi
 }
 
+# A label recorded on an existing container; empty when absent.
+container_label() {
+    local val
+    val="$($DOCKER inspect -f "{{index .Config.Labels \"$2\"}}" "$1" 2>/dev/null)" || val=""
+    [ "$val" = "<no value>" ] && val=""
+    printf '%s\n' "$val"
+}
+
 # The cage.docker label of an existing container: "host", "colima", or "".
 container_docker_mode() {
-    local mode
-    mode="$($DOCKER inspect -f '{{index .Config.Labels "cage.docker"}}' "$1" 2>/dev/null)" || mode=""
-    [ "$mode" = "<no value>" ] && mode=""
-    echo "$mode"
+    container_label "$1" "cage.docker"
 }
 
 # On macOS a project's container may live in the cage colima VM rather than
@@ -117,6 +124,15 @@ route_to_container() {
     return 0
 }
 
+# Non-empty hint when a colima cage VM exists but its daemon is down —
+# containers living there are invisible until it is started again.
+cage_vm_down_hint() {
+    [[ "$(uname -s)" == "Darwin" ]] || return 0
+    [ -d "${COLIMA_CAGE_SOCK%/*}" ] || return 0
+    [ -S "$COLIMA_CAGE_SOCK" ] && return 0
+    echo "Note: a colima '$COLIMA_PROFILE' VM exists but is not running — if this cage lives there, run 'colima start --profile $COLIMA_PROFILE' and retry."
+}
+
 # Recreation flows (restart, upgrade) must keep a docker-enabled cage
 # docker-enabled: restore CAGE_DOCKER_MODE from the container's label
 # before the old container is removed.
@@ -127,6 +143,42 @@ preserve_docker_mode() {
     [ -n "$mode" ] || return 0
     CAGE_DOCKER_MODE="$mode"
     [ "$mode" = "host" ] && cage_banner_docker_warning
+    return 0
+}
+
+# Recreation flows must also keep the ports and mounts the container was
+# created with: restore the -p/-v flags recorded in the cage.ports and
+# cage.volumes labels into CAGE_RESTORED_FLAGS before the old container
+# is removed.  Ports are space-delimited in the label (a port spec cannot
+# contain a space); volumes are newline-delimited (a host path can).
+preserve_cli_flags() {
+    local name="$1"
+    local spec
+    CAGE_RESTORED_FLAGS=()
+    local -a port_specs=()
+    IFS=' ' read -r -a port_specs <<< "$(container_label "$name" "cage.ports")"
+    for spec in ${port_specs[@]+"${port_specs[@]}"}; do
+        CAGE_RESTORED_FLAGS+=(-p "$spec")
+    done
+    while IFS= read -r spec; do
+        [ -n "$spec" ] && CAGE_RESTORED_FLAGS+=(-v "$spec")
+    done <<< "$(container_label "$name" "cage.volumes")"
+    return 0
+}
+
+# Resolve the image a container was created from (the cage.image label) so
+# restart recreates — and upgrade checks — the same image ref rather than
+# whatever the current default happens to be.  An explicit CAGE_IMAGE in
+# the environment still wins; the label is read either way so the docker
+# call sequence does not depend on the environment.
+preserve_image() {
+    local name="$1"
+    local img
+    img="$(container_label "$name" "cage.image")"
+    [ -n "$img" ] || return 0
+    [ -n "${CAGE_IMAGE:-}" ] && return 0
+    IMAGE="$img"
+    CAGE_RESTORED_IMAGE=1
     return 0
 }
 
@@ -297,6 +349,80 @@ build_mount_args() {
     printf '%s\n' "${out[@]}"
 }
 
+# Read port specs from a ports file, one docker -p spec per line.  Blank
+# lines and lines starting with '#' are ignored; every other line is handed
+# to docker -p verbatim (host:container, ip:host:container, ranges, /udp).
+read_ports_file() {
+    local file="$1"
+    [ -f "$file" ] || return 0
+
+    local spec
+    # No IFS= here, so read strips leading/trailing whitespace from each line.
+    while read -r spec || [ -n "$spec" ]; do
+        case "$spec" in
+            ""|"#"*) continue ;;
+        esac
+        printf '%s\n' "$spec"
+    done < "$file"
+}
+
+# The container-side key of a -p spec: the container port plus protocol.
+# '3000:3000' and '9999:3000' share the key 3000/tcp and conflict;
+# '3000:3000/udp' is a different mapping and coexists.
+port_target() {
+    local spec="$1"
+    local proto="tcp"
+    case "$spec" in
+        */*) proto="${spec##*/}"; spec="${spec%/*}" ;;
+    esac
+    printf '%s\n' "${spec##*:}/${proto}"
+}
+
+# Emit '-p' and '<spec>' (one per line) for every extra port declared in
+# ~/.config/cage/ports and <project>/.cage.ports.  Same precedence story as
+# build_mount_args: when two specs publish the same container port, a -p on
+# the command line beats the per-project file, which beats the global file.
+build_port_args() {
+    local project_dir="$1"
+    shift
+
+    # Targets already claimed by command-line -p flags, delimited for lookup.
+    local claimed="|"
+    local target
+    while [ $# -gt 0 ]; do
+        if [ "$1" = "-p" ] && [ $# -ge 2 ]; then
+            target="$(port_target "$2")"
+            claimed="${claimed}${target}|"
+            shift 2
+        else
+            shift
+        fi
+    done
+
+    local -a specs=()
+    local spec
+    while IFS= read -r spec; do
+        specs+=("$spec")
+    done < <(read_ports_file "$HOME/.config/cage/ports"
+             read_ports_file "${project_dir}/.cage.ports")
+
+    # Walk back to front so the last declaration of a target is the one kept,
+    # prepending each survivor so the emitted order still matches the files.
+    local -a out=()
+    local i
+    for (( i=${#specs[@]}-1; i>=0; i-- )); do
+        target="$(port_target "${specs[$i]}")"
+        case "$claimed" in
+            *"|${target}|"*) continue ;;
+        esac
+        claimed="${claimed}${target}|"
+        out=(-p "${specs[$i]}" ${out[@]+"${out[@]}"})
+    done
+
+    [ ${#out[@]} -gt 0 ] || return 0
+    printf '%s\n' "${out[@]}"
+}
+
 # Copy seed files from ~/.config/cage/home/ into the container's /home/vscode/.
 # Uses cp -n (no-clobber) so existing files in the volume are never overwritten.
 # The container must be in "created" (stopped) state.  This function starts
@@ -336,6 +462,7 @@ cmd_enter() {
             if [ ${#cli_flags[@]} -gt 0 ]; then
                 info "Container already exists — ignoring -p/-v flags. Use 'cage.sh rm' to recreate with new ports and mounts."
             fi
+            preserve_image "$name"
             if image_newer_available "$name"; then
                 info "A newer image is available. Run 'cage upgrade' to upgrade."
             fi
@@ -346,6 +473,7 @@ cmd_enter() {
             if [ ${#cli_flags[@]} -gt 0 ]; then
                 info "Container already exists — ignoring -p/-v flags. Use 'cage.sh rm' to recreate with new ports and mounts."
             fi
+            preserve_image "$name"
             if image_newer_available "$name"; then
                 info "A newer image is available. Run 'cage upgrade' to upgrade."
             fi
@@ -353,9 +481,14 @@ cmd_enter() {
             drop_into_cage "$name" $DOCKER start -ai "$name"
             ;;
         none)
+            # Pull the latest image — unless we are recreating from a
+            # container's recorded image (restart must not silently move
+            # the container to a newer image) and it is already local.
             if [[ "$IMAGE" == */* ]]; then
-                info "Pulling latest image..."
-                $DOCKER pull "$IMAGE"
+                if [ -z "$CAGE_RESTORED_IMAGE" ] || ! $DOCKER image inspect "$IMAGE" >/dev/null 2>&1; then
+                    info "Pulling latest image..."
+                    $DOCKER pull "$IMAGE"
+                fi
             fi
             info "Creating $name"
 
@@ -382,6 +515,15 @@ cmd_enter() {
                 prev_arg="$mount_arg"
                 extra_mount_args+=("$mount_arg")
             done < <(build_mount_args "$project_dir" ${cli_flags[@]+"${cli_flags[@]}"})
+
+            # Extra ports declared in ~/.config/cage/ports and .cage.ports.
+            # File-sourced, so they are re-read on every creation and are
+            # deliberately NOT recorded in the cage.ports label.
+            local -a extra_port_args=()
+            local port_arg
+            while IFS= read -r port_arg; do
+                extra_port_args+=("$port_arg")
+            done < <(build_port_args "$project_dir" ${cli_flags[@]+"${cli_flags[@]}"})
 
             # Forward the host SSH agent so git/ssh work inside the container.
             local -a ssh_agent_args=()
@@ -410,6 +552,20 @@ cmd_enter() {
             [[ -f "$global_env" ]] && env_file_args+=(--env-file "$global_env")
             [[ -f "$project_env" ]] && env_file_args+=(--env-file "$project_env")
 
+            # Record the image and the CLI -p/-v flags in labels so
+            # restart/upgrade can restore them (see preserve_image and
+            # preserve_cli_flags for precedence and delimiters).
+            local -a flag_label_args=(-l "cage.image=${IMAGE}")
+            local ports_label="" vols_label="" nl=$'\n' idx
+            for (( idx=0; idx+1<${#cli_flags[@]}; idx+=2 )); do
+                case "${cli_flags[$idx]}" in
+                    -p) ports_label+="${ports_label:+ }${cli_flags[$((idx+1))]}" ;;
+                    -v) vols_label+="${vols_label:+$nl}${cli_flags[$((idx+1))]}" ;;
+                esac
+            done
+            [ -n "$ports_label" ] && flag_label_args+=(-l "cage.ports=${ports_label}")
+            [ -n "$vols_label" ] && flag_label_args+=(-l "cage.volumes=${vols_label}")
+
             # Docker-enabled cage: mount the daemon socket and record the mode.
             local -a docker_args=()
             if [ -n "$CAGE_DOCKER_MODE" ]; then
@@ -429,8 +585,10 @@ cmd_enter() {
                 --hostname "$name" \
                 --workdir "$project_dir" \
                 ${cli_flags[@]+"${cli_flags[@]}"} \
+                ${flag_label_args[@]+"${flag_label_args[@]}"} \
                 "${mount_args[@]}" \
                 ${extra_mount_args[@]+"${extra_mount_args[@]}"} \
+                ${extra_port_args[@]+"${extra_port_args[@]}"} \
                 ${ssh_agent_args[@]+"${ssh_agent_args[@]}"} \
                 ${env_file_args[@]+"${env_file_args[@]}"} \
                 ${docker_args[@]+"${docker_args[@]}"} \
@@ -466,14 +624,20 @@ setup_colima_cage() {
     src_root="${src_root:-$HOME/src}"
     src_root="${src_root%/}"
 
+    # Applies to both errors below: an already-provisioned VM won't pick
+    # up a CAGE_SRC_ROOT change until it is recreated.
+    local vm_note=""
+    if [ -d "$HOME/.colima/$COLIMA_PROFILE" ]; then
+        vm_note=" Note: the cage VM keeps the mounts it was created with — after changing CAGE_SRC_ROOT, run 'colima delete --profile $COLIMA_PROFILE' and dstart again."
+    fi
+
+    [ -d "$src_root" ] || die "CAGE_SRC_ROOT ($src_root) does not exist — it is the only host directory mounted into the cage VM, so dstart needs it.
+       Create it (mkdir -p $src_root) or set CAGE_SRC_ROOT in ~/.config/cage/env to your source root.$vm_note"
+
     case "$project_dir/" in
         "$src_root"/*) ;;
         *)
-            local hint=""
-            if [ -d "$HOME/.colima/$COLIMA_PROFILE" ]; then
-                hint=" Note: the cage VM keeps the mounts it was created with — after changing CAGE_SRC_ROOT, run 'colima delete --profile $COLIMA_PROFILE' and dstart again."
-            fi
-            die "project $project_dir is outside CAGE_SRC_ROOT ($src_root), so it can't be mounted into the cage VM. Set CAGE_SRC_ROOT in ~/.config/cage/env or move the project.$hint"
+            die "project $project_dir is outside CAGE_SRC_ROOT ($src_root), so it can't be mounted into the cage VM. Set CAGE_SRC_ROOT in ~/.config/cage/env or move the project.$vm_note"
             ;;
     esac
 
@@ -549,7 +713,8 @@ cmd_stop() {
             info "$name is already stopped"
             ;;
         none)
-            die "No container for $project_dir"
+            local hint; hint="$(cage_vm_down_hint)"
+            die "No container for ${project_dir}.${hint:+ $hint}"
             ;;
     esac
 }
@@ -573,7 +738,8 @@ cmd_rm() {
             $DOCKER rm "$name"
             ;;
         none)
-            die "No container for $project_dir"
+            local hint; hint="$(cage_vm_down_hint)"
+            die "No container for ${project_dir}.${hint:+ $hint}"
             ;;
     esac
 }
@@ -650,19 +816,37 @@ cmd_status() {
     echo "Container: $name"
     echo "State:     $state"
 
-    if [ "$state" != "none" ]; then
-        local dmode
-        dmode="$(container_docker_mode "$name")"
-        echo "Docker:    ${dmode:-none}"
+    if [ "$state" = "none" ]; then
+        local vmhint; vmhint="$(cage_vm_down_hint)"
+        [ -n "$vmhint" ] && info "$vmhint"
+        return 0
+    fi
 
-        local ports
-        ports="$($DOCKER port "$name" 2>/dev/null)" || true
-        if [ -n "$ports" ]; then
-            echo "Ports:"
-            echo "$ports" | sed 's/^/  /'
+    local dmode
+    dmode="$(container_docker_mode "$name")"
+    echo "Docker:    ${dmode:-none}"
+
+    local ports
+    ports="$($DOCKER port "$name" 2>/dev/null)" || true
+    if [ -n "$ports" ]; then
+        echo "Ports:"
+        echo "$ports" | sed 's/^/  /'
+    else
+        # Nothing bound (e.g. stopped container): show the recorded config.
+        local ports_label
+        ports_label="$(container_label "$name" "cage.ports")"
+        if [ -n "$ports_label" ]; then
+            echo "Ports:     $ports_label (configured; active when running)"
         else
             echo "Ports:     (none)"
         fi
+    fi
+
+    local vols_label
+    vols_label="$(container_label "$name" "cage.volumes")"
+    if [ -n "$vols_label" ]; then
+        echo "Mounts:"
+        echo "$vols_label" | sed 's/^/  /'
     fi
 }
 
@@ -794,12 +978,15 @@ cmd_restart() {
     state="$(container_state "$name")"
 
     if [ "$state" = "none" ]; then
-        die "No container for $project_dir. Use 'cage start' to create one."
+        local hint; hint="$(cage_vm_down_hint)"
+        die "No container for $project_dir. Use 'cage start' to create one.${hint:+ $hint}"
     fi
 
     preserve_docker_mode "$name"
+    preserve_cli_flags "$name"
+    preserve_image "$name"
     $DOCKER rm -f "$name" >/dev/null 2>&1 || true
-    cmd_enter "$project_dir"
+    cmd_enter "$project_dir" ${CAGE_RESTORED_FLAGS[@]+"${CAGE_RESTORED_FLAGS[@]}"}
 }
 
 cmd_update() {
@@ -812,24 +999,32 @@ cmd_update() {
 
 cmd_upgrade() {
     local project_dir="$1"
-    cmd_update
     local name
     name="$(container_name "$project_dir")"
+    # Route before any pull: a cage living in the colima VM must be pulled
+    # for, compared, and recreated on that daemon, not the default one.
     route_to_container "$name"
     local state
     state="$(container_state "$name")"
-    if [ "$state" != "none" ]; then
-        if image_newer_available "$name"; then
-            preserve_docker_mode "$name"
-            info "Removing old container $name"
-            $DOCKER rm -f "$name" >/dev/null 2>&1 || true
-            info "Starting fresh container with new image"
-            cmd_enter "$project_dir"
-        else
-            info "Container is already on the latest image."
-        fi
+    if [ "$state" = "none" ]; then
+        cmd_update
+        local hint; hint="$(cage_vm_down_hint)"
+        info "No existing container. Use 'cage start' to create one.${hint:+ $hint}"
+        return 0
+    fi
+    # Upgrade moves to the latest of the image the container was created
+    # from (recorded in cage.image), not whatever the current default is.
+    preserve_image "$name"
+    cmd_update
+    if image_newer_available "$name"; then
+        preserve_docker_mode "$name"
+        preserve_cli_flags "$name"
+        info "Removing old container $name"
+        $DOCKER rm -f "$name" >/dev/null 2>&1 || true
+        info "Starting fresh container with new image"
+        cmd_enter "$project_dir" ${CAGE_RESTORED_FLAGS[@]+"${CAGE_RESTORED_FLAGS[@]}"}
     else
-        info "No existing container. Use 'cage start' to create one."
+        info "Container is already on the latest image."
     fi
 }
 
@@ -851,11 +1046,14 @@ Commands:
   status    Show container name, state, and port mappings
   list      List all cage containers
   shell     Open additional bash shell in running container
-  restart   Remove and recreate container (shared home volume preserved)
+  restart   Remove and recreate container from its original image, without
+            updating it — use 'upgrade' for that (shared home volume,
+            -p ports, and -v mounts preserved)
   obliterate Destroy shared home volume and all cage containers (caution!!!)
   rmconfig  Stop all containers and remove shared home volume (containers are preserved, but will be recreated with fresh home on next start)
   update    Pull latest container image
-  upgrade   Pull latest image and recreate container
+  upgrade   Pull the latest version of the container's image and recreate
+            it if newer (ports, mounts, and docker mode preserved)
   help      Show this help
 
 Environment:
@@ -883,6 +1081,14 @@ Mount files:
                             path                     same path in container
                             path::opts               same path, with options
                             host:container[:opts]    passed to docker as-is
+
+Port files:
+  ~/.config/cage/ports    Global extra ports for all containers (optional)
+  .cage.ports             Per-project extra ports (optional, overrides global)
+                          Format: one docker -p spec per line (e.g. 3000:3000,
+                          8080:80/udp).  Blank lines and # comments ignored.
+                          For the same container port: -p beats .cage.ports,
+                          which beats the global file.
 
 Port (-p), volume (-v) flags and config files only apply when creating a new container.
 To change: cage.sh rm && cage.sh start -p 3000:3000 -v /data:/data
