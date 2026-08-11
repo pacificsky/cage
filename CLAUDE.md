@@ -56,7 +56,7 @@ Deterministic: `cage-<dirname>-<8char-sha256-of-absolute-path>`. Example: `/User
 
 ### Seed Directory
 
-`~/.config/cage/home/` contents are copied into `/home/vscode/` on new container creation using `cp -n` (no-clobber). Existing files in the shared volume are never overwritten. The seed runs on every path that creates a new container: `start` (new), `restart`, and `upgrade`.
+`~/.config/cage/home/` contents are copied into `/home/vscode/` on new container creation. The copy runs as root (`docker cp` stages the seed root-owned, and 0600 seeds must still be readable), with the staging dir first chown'd to `/home/vscode`'s owner and `cp -rp --update=none` (no-clobber) preserving that ownership — existing files in the shared volume are never overwritten. The seed runs on every path that creates a new container: `start` (new), `restart`, and `upgrade`.
 
 ### Environment Files
 
