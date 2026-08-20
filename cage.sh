@@ -425,8 +425,12 @@ build_port_args() {
 }
 
 # Copy seed files from ~/.config/cage/home/ into the container's /home/vscode/.
-# Uses cp -n (no-clobber) so existing files in the volume are never overwritten.
-# The container must be in "created" (stopped) state.  This function starts
+# docker cp stages the seed root-owned, so the copy runs as root — a non-root
+# exec can't read restrictive-mode seeds (0600 keys/creds). The staging dir is
+# first chown'd to whoever owns /home/vscode and cp -p preserves that, so
+# seeded files land owned by the container user rather than root.
+# --update=none (no-clobber) means existing files in the volume are never
+# overwritten. The container must be in "created" (stopped) state.  This function starts
 # it (detached) so docker exec can run, and returns 0.  If there is nothing
 # to seed it returns 1 and leaves the container stopped.
 seed_home() {
@@ -439,7 +443,7 @@ seed_home() {
     info "Seeding home directory from $seed_dir"
     $DOCKER cp "$seed_dir/." "$name:/tmp/cage-seed"
     $DOCKER start "$name"
-    $DOCKER exec "$name" sh -c 'cp -rn /tmp/cage-seed/. /home/vscode/ && rm -rf /tmp/cage-seed'
+    $DOCKER exec -u root "$name" sh -c 'chown -R "$(stat -c %u:%g /home/vscode)" /tmp/cage-seed && cp -rp --update=none /tmp/cage-seed/. /home/vscode/ && rm -rf /tmp/cage-seed'
     return 0
 }
 

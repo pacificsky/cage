@@ -1612,7 +1612,7 @@ test_start_seeds_home_when_seed_dir_exists() {
 
     local calls; calls="$(mock_calls)"
     assert_contains "$calls" "/tmp/cage-seed" "seed temp dir used"
-    assert_contains "$calls" "cp -rn /tmp/cage-seed/. /home/vscode/" "cp -rn in exec"
+    assert_contains "$calls" "cp -rp --update=none /tmp/cage-seed/. /home/vscode/" "no-clobber cp in exec"
 
     rm -rf "$HOME/.config/cage/home"
 }
