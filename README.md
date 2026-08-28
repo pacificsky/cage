@@ -334,13 +334,37 @@ Notes:
   `colima delete --profile cage`.
 - macOS: the cage VM's daemon has its own `cage-home` volume, so your first
   dstart needs a one-time re-login to Claude (the seed directory applies as
-  usual).
+  usual). If you were already running cages on the default colima VM, you
+  can carry that home over instead — see
+  [Migrating an existing home](#migrating-an-existing-home-into-the-cage-vm).
 - VM sizing: `CAGE_VM_CPU` (default 4), `CAGE_VM_MEMORY` (default 8 GiB), and
   `CAGE_VM_DISK` (default 60 GiB), set in the environment or
   `~/.config/cage/env`. They apply when the VM is first provisioned; to change
   them later, `colima stop --profile cage` and re-run `cage dstart` with the
   new values (disk can only grow). Changing `CAGE_SRC_ROOT` after the VM
   exists requires `colima delete --profile cage`.
+
+### Migrating an existing home into the cage VM
+
+Before `dstart` existed, macOS cages ran on the default colima VM and kept
+`/home/vscode` in that daemon's `cage-home` volume. Docker volumes are
+per-daemon, so the cage VM starts fresh. To move your Claude Code state, shell
+history, and the rest of your home across, run the migration script from a
+checkout of this repo with both VMs running and no cages running:
+
+```bash
+cage dstart                                  # once, so the cage VM's home is initialised; then exit
+cage stop                                    # in every project with a running cage
+scripts/migrate-home-to-cage-vm.sh -n        # dry run: lists what would be copied
+scripts/migrate-home-to-cage-vm.sh           # copy /home/vscode (prompts first)
+```
+
+It streams the volume between the two daemons, preserving ownership and
+permissions, and overlays it onto the new home: same-path files are
+overwritten, files that exist only in the new home are kept, and the old
+volume is left untouched. `--claude-only` copies just `~/.claude`,
+`~/.claude.json`, and `~/.codex`; `--brew` also copies the `cage-brew` volume;
+`--exclude ./.cache` (repeatable) trims a full copy. See `--help` for the rest.
 
 ## Run from Source
 
